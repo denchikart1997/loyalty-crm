@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Карты лояльности</title>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root {
     --bg: #f3f7f0; --surface: #ffffff; --ink: #16261b; --muted: #6b7c70; --line: #e2ebdd;
@@ -72,8 +71,9 @@
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 14px; margin: 14px 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
   .kv a.tel { color: var(--brand-dark); text-decoration: none; }
-  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #0d1a12; }
-  #reader:empty { display: none; }
+  #scan-stage { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; background: #0d1a12; margin-bottom: 4px; }
+  #scan-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #scan-stage::after { content: ''; position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.85); border-radius: 16px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.25); pointer-events: none; }
   .qr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 14px; }
   .qr-cell { text-align: center; border: 1px dashed var(--line); border-radius: 10px; padding: 10px; background: #fff; }
   .qr-cell img { width: 100%; height: auto; }
@@ -102,7 +102,7 @@
 // ============================================================================
 // НАСТРОЙКА: вставьте сюда ссылку вашего Apps Script Web App (заканчивается на /exec)
 // ============================================================================
-var API_BASE_URL = 'https://script.google.com/macros/s/AKfycbzIMqmhLsldw-Wi0btoGDtpgLlXQNIcVrk6tGMB9owQv_wOAD-sw_KUkz3p_ia4mGvK/exec';
+var API_BASE_URL = 'ВСТАВЬТЕ_СЮДА_ССЫЛКУ_НА_APPS_SCRIPT_/exec';
 // ============================================================================
 
 // ---- SVG-иконки (inline, чтобы не тянуть внешние зависимости) ----
@@ -140,7 +140,7 @@ function baseUrl() { return window.location.origin + window.location.pathname; }
 function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
 
-var state = { user: null, scanner: null, scanning: false };
+var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null };
 var root = document.getElementById('root');
 
 // ============================ РОУТИНГ ПРИ ЗАГРУЗКЕ ============================
@@ -296,7 +296,7 @@ function viewScan(v) {
     '<div class="card">' +
       '<h2>Сканировать карту</h2>' +
       '<p class="sub">Наведите камеру на QR-код карты клиента.</p>' +
-      '<div id="reader"></div>' +
+      '<div id="scan-stage" class="hidden"><video id="scan-video" playsinline muted></video></div>' +
       '<button class="btn-primary" id="scan-btn">Включить камеру</button>' +
       '<div id="scan-status" class="msg" style="text-align:center;"></div>' +
       '<label>Или введите номер карты вручную</label>' +
@@ -319,93 +319,172 @@ function scanStatus(text, isErr) {
   var el = document.getElementById('scan-status');
   if (!el) return;
   el.textContent = text || '';
-  el.className = 'msg' + (isErr ? ' err' : '') + (text ? '' : ' hidden');
+  el.className = 'msg' + (isErr ? ' err' : '');
   el.classList.toggle('hidden', !text);
 }
 
+// Ленивая загрузка резервного декодера jsQR (только если нет нативного BarcodeDetector)
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  return new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+    s.onload = function () { resolve(window.jsQR); };
+    s.onerror = function () { reject(new Error('jsQR load failed')); };
+    document.head.appendChild(s);
+  });
+}
+
 function toggleScanner() {
-  var btn = document.getElementById('scan-btn');
   if (state.scanning || state.starting) { stopScanner(); return; }
+  startScanner();
+}
+
+function startScanner() {
+  var btn = document.getElementById('scan-btn');
+  var stage = document.getElementById('scan-stage');
+  var video = document.getElementById('scan-video');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    scanStatus('Этот браузер не поддерживает камеру. Откройте сайт в Chrome, либо введите номер карты вручную.', true);
+    return;
+  }
 
   state.starting = true;
   btn.textContent = 'Запуск камеры…';
   btn.disabled = true;
-  scanStatus('');
+  scanStatus('Запрашиваем доступ к камере — если на телефоне появится системное окно, нажмите «Разрешить»…');
 
-  // Полностью пересоздаём контейнер, чтобы не осталось «мёртвого» видео от прошлой сессии
-  var reader = document.getElementById('reader');
-  if (reader) reader.innerHTML = '';
+  // Страховочный таймаут: если за 6 сек камера не пошла — не виснем, а показываем ошибку
+  state.startTimeout = setTimeout(function () {
+    if (state.starting && !state.scanning) {
+      failScan('Камера не отвечает больше 6 секунд. Обычно это значит, что разрешение на камеру для сайта заблокировано на уровне телефона/браузера. Проверьте значок замка слева от адреса → Разрешения → Камера → Разрешить, затем перезагрузите страницу. Можно ввести номер карты вручную.');
+    }
+  }, 6000);
 
-  if (typeof Html5Qrcode === 'undefined') {
-    state.starting = false; btn.disabled = false; btn.textContent = 'Включить камеру';
-    scanStatus('Не загрузилась библиотека сканера. Проверьте интернет и обновите страницу, либо введите номер карты вручную.', true);
-    return;
-  }
+  try {
+    // Мгновенная проверка текущего статуса разрешения, если браузер это поддерживает (не работает в iOS Safari — там просто пропустим)
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: 'camera' }).then(function (perm) {
+        if (perm.state === 'denied') {
+          clearTimeout(state.startTimeout);
+          failScan('Доступ к камере заблокирован для этого сайта. Нажмите на значок замка слева от адреса → Разрешения → Камера → Разрешить, затем перезагрузите страницу.');
+        }
+      }).catch(function () { /* API недоступен на этом браузере — просто продолжаем обычным путём */ });
+    }
 
-  state.scanner = new Html5Qrcode('reader', { verbose: false });
-  var config = { fps: 10, qrbox: { width: 230, height: 230 }, aspectRatio: 1.0 };
-
-  var onFrame = function (text) { onScan(text); };
-  var onErr = function () {}; // покадровые «QR не найден» — игнорируем
-
-  // Попытка 1: просто задняя камера
-  state.scanner.start({ facingMode: 'environment' }, config, onFrame, onErr)
-    .then(afterStart)
-    .catch(function () {
-      // Попытка 2: берём конкретную камеру из списка устройств (надёжнее на части Android)
-      Html5Qrcode.getCameras().then(function (cams) {
-        if (!cams || !cams.length) { failStart('Камеры не найдены на устройстве.'); return; }
-        var back = cams.find(function (c) { return /back|rear|environment|задн/i.test(c.label); });
-        var camId = (back || cams[cams.length - 1]).id;
-        state.scanner.start({ deviceId: { exact: camId } }, config, onFrame, onErr)
-          .then(afterStart)
-          .catch(function (e2) { failStart(describeCamError(e2)); });
-      }).catch(function (e3) { failStart(describeCamError(e3)); });
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } }, audio: false
+    }).then(function (stream) {
+      state.stream = stream;
+      video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      return video.play().catch(function () {}); // play может вернуть отклонённый промис на части браузеров — не критично
+    }).then(function () {
+      clearTimeout(state.startTimeout);
+      state.starting = false;
+      state.scanning = true;
+      stage.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Остановить камеру';
+      scanStatus('Наведите на QR-код');
+      beginDetectLoop(video);
+    }).catch(function (err) {
+      clearTimeout(state.startTimeout);
+      failScan(describeCamError(err));
     });
+  } catch (syncErr) {
+    clearTimeout(state.startTimeout);
+    failScan('Внутренняя ошибка запуска камеры: ' + (syncErr && syncErr.message ? syncErr.message : syncErr) + '. Введите номер карты вручную.');
+  }
+}
 
-  function afterStart() {
-    state.starting = false;
-    state.scanning = true;
-    btn.disabled = false;
-    btn.textContent = 'Остановить камеру';
-    scanStatus('Наведите на QR-код');
+function beginDetectLoop(video) {
+  // Вариант A: нативный BarcodeDetector (Chrome на Android)
+  if ('BarcodeDetector' in window) {
+    var detector;
+    try { detector = new window.BarcodeDetector({ formats: ['qr_code'] }); }
+    catch (e) { detector = null; }
+    if (detector) {
+      var tick = function () {
+        if (!state.scanning) return;
+        detector.detect(video).then(function (codes) {
+          if (codes && codes.length) { onScan(codes[0].rawValue); return; }
+          state.rafId = requestAnimationFrame(tick);
+        }).catch(function () {
+          state.rafId = requestAnimationFrame(tick);
+        });
+      };
+      state.rafId = requestAnimationFrame(tick);
+      return;
+    }
   }
-  function failStart(text) {
-    state.starting = false;
-    state.scanning = false;
-    btn.disabled = false;
-    btn.textContent = 'Включить камеру';
-    var reader = document.getElementById('reader');
-    if (reader) reader.innerHTML = '';
-    scanStatus(text || 'Не удалось включить камеру.', true);
-  }
+  // Вариант B: резервный jsQR через canvas
+  var canvas = document.createElement('canvas');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  loadJsQR().then(function (jsQR) {
+    var tick = function () {
+      if (!state.scanning) return;
+      if (video.readyState >= 2 && video.videoWidth) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        var code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) { onScan(code.data); return; }
+      }
+      state.rafId = requestAnimationFrame(tick);
+    };
+    state.rafId = requestAnimationFrame(tick);
+  }).catch(function () {
+    scanStatus('Не удалось загрузить модуль распознавания. Введите номер карты вручную.', true);
+  });
 }
 
 function describeCamError(err) {
   var name = (err && (err.name || err.toString())) || '';
-  if (/NotAllowed|Permission/i.test(name)) return 'Доступ к камере запрещён. Разрешите камеру для сайта (значок слева от адреса) и попробуйте снова.';
-  if (/NotFound|Devices|OverConstrained/i.test(name)) return 'Подходящая камера не найдена. Введите номер карты вручную.';
-  if (/NotReadable|TrackStart/i.test(name)) return 'Камера занята другим приложением. Закройте его и попробуйте снова.';
-  return 'Не удалось включить камеру. Можно ввести номер карты вручную.';
+  if (/NotAllowed|Permission|SecurityError/i.test(name)) return 'Доступ к камере запрещён. Нажмите на значок слева от адреса сайта → разрешите камеру → обновите страницу.';
+  if (/NotFound|OverConstrained|Devices/i.test(name)) return 'Камера не найдена. Введите номер карты вручную.';
+  if (/NotReadable|TrackStart|Abort/i.test(name)) return 'Камера занята другим приложением. Закройте его и попробуйте снова.';
+  return 'Не удалось включить камеру: ' + name + '. Можно ввести номер вручную.';
+}
+
+function failScan(text) {
+  cleanupCamera();
+  state.starting = false;
+  state.scanning = false;
+  var btn = document.getElementById('scan-btn');
+  var stage = document.getElementById('scan-stage');
+  if (stage) stage.classList.add('hidden');
+  if (btn) { btn.disabled = false; btn.textContent = 'Включить камеру'; }
+  scanStatus(text || 'Не удалось включить камеру.', true);
+}
+
+function cleanupCamera() {
+  if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = null; }
+  if (state.startTimeout) { clearTimeout(state.startTimeout); state.startTimeout = null; }
+  if (state.stream) {
+    try { state.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    state.stream = null;
+  }
+  var video = document.getElementById('scan-video');
+  if (video) { try { video.pause(); } catch (e) {} video.srcObject = null; }
 }
 
 function stopScanner() {
-  var btn = document.getElementById('scan-btn');
-  var s = state.scanner;
-  if (s && (state.scanning || state.starting)) {
-    try {
-      s.stop().then(function () { try { s.clear(); } catch (e) {} }).catch(function () {});
-    } catch (e) {}
-  }
+  cleanupCamera();
   state.scanning = false;
   state.starting = false;
+  var btn = document.getElementById('scan-btn');
+  var stage = document.getElementById('scan-stage');
+  if (stage) stage.classList.add('hidden');
   if (btn) { btn.disabled = false; btn.textContent = 'Включить камеру'; }
   scanStatus('');
 }
 
 function onScan(text) {
   stopScanner();
-  var id = text; var m = text.match(/[?&]id=([^&]+)/); if (m) id = decodeURIComponent(m[1]);
+  var id = text; var m = String(text).match(/[?&]id=([^&]+)/); if (m) id = decodeURIComponent(m[1]);
   var inp = document.getElementById('scan-manual'); if (inp) inp.value = id;
   lookupCard(id);
 }
