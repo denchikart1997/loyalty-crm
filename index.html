@@ -109,6 +109,28 @@
     body.printing .topbar, body.printing .tabs, body.printing .wrap, body.printing .overlay { display: none !important; }
   }
   @media print { .topbar, .tabs, .no-print { display: none !important; } .wrap { padding: 0; max-width: 100%; } .card { box-shadow: none; border: none; } .qr-grid { grid-template-columns: repeat(3, 1fr); } }
+
+  /* Наклейка с загруженным фоном: фон на всю карту, QR позиционируется поверх по заданным координатам */
+  .pcard.has-bg { padding: 0; border: none; display: block; background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; }
+  .pcard.has-bg .pcard-qr { position: absolute; width: auto; height: auto; }
+  .pcard.has-bg .pcard-qr .qr-slot, .pcard.has-bg .pcard-qr img { width: 100%; height: 100%; display: block; }
+  .bg-preview-wrap { display: flex; justify-content: center; margin: 4px 0 6px; }
+  .bg-preview-wrap .pcard { transform: scale(1.35); transform-origin: center; margin: 20px 0; }
+
+  /* Индикатор загрузки внутри кнопок — чтобы было видно, что система работает, а не зависла */
+  .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: sp-rotate .6s linear infinite; margin-right: 7px; vertical-align: -2px; }
+  .btn-secondary .spinner, .btn-ghost .spinner { border-color: rgba(47,143,78,.25); border-top-color: var(--brand-dark); }
+  @keyframes sp-rotate { to { transform: rotate(360deg); } }
+
+  /* Skeleton-заглушки на время первой загрузки списков */
+  .skel { background: linear-gradient(100deg, #eef1ec 30%, #e3e9df 45%, #eef1ec 60%); background-size: 250% 100%; animation: sk-shimmer 1.3s ease-in-out infinite; border-radius: 8px; }
+  @keyframes sk-shimmer { 0% { background-position: 140% 0; } 100% { background-position: -40% 0; } }
+  .skel-stat { height: 58px; border-radius: 12px; }
+  .skel-row { height: 64px; border-radius: 12px; margin-bottom: 10px; }
+
+  /* Плавное исчезновение элемента списка при удалении — без ожидания перезагрузки всего списка */
+  .citem.removing { opacity: 0; transform: scale(.96); pointer-events: none; }
+  .citem { transition: opacity .18s ease, transform .18s ease; }
 </style>
 </head>
 <body>
@@ -206,8 +228,27 @@ function copyLink(encText) {
 
 function qrImageUrl(text, size) { return QR_PROVIDERS[0](text, size || 200); }
 
-/** HTML одной наклейки-карты (85.6×54мм): логотип+название магазина, QR, номер карты */
+/** HTML одной наклейки-карты (85.6×54мм). Если в настройках загружен свой фон — QR рисуется поверх него по заданным координатам; иначе — стандартный вид с рамкой. */
 function cardStickerHtml(id) {
+  var s = state.settings;
+  if (s && s.backgroundImageUrl) return stickerHtmlWithBg(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize, id);
+  return stickerHtmlPlain(id);
+}
+
+/** Наклейка поверх произвольного фона. x/y/size — проценты от размеров карты (85.6×54мм), поэтому одинаково работает и в превью, и при печати. */
+function stickerHtmlWithBg(bgUrl, x, y, size, id) {
+  var xMm = (Number(x) / 100 * 85.6).toFixed(2);
+  var yMm = (Number(y) / 100 * 54).toFixed(2);
+  var szMm = (Number(size) / 100 * 85.6).toFixed(2);
+  return '<div class="pcard has-bg" style="background-image:url(&quot;' + esc(bgUrl) + '&quot;);">' +
+    '<div class="pcard-qr" style="left:' + xMm + 'mm; top:' + yMm + 'mm; width:' + szMm + 'mm; height:' + szMm + 'mm;">' +
+      qrImgHtml(cardLink(id), 260, 'width:100%;height:100%;display:block;') +
+    '</div>' +
+  '</div>';
+}
+
+/** Стандартный вид наклейки без фона (как раньше) */
+function stickerHtmlPlain(id) {
   return '<div class="pcard">' +
     '<div class="pcard-head">' + ICON.leaf + '<span>' + esc(SHOP_NAME) + '</span></div>' +
     '<div class="pcard-qr">' + qrImgHtml(cardLink(id), 260, 'width:100%;height:100%;display:block;') + '</div>' +
@@ -231,7 +272,7 @@ function baseUrl() { return window.location.origin + window.location.pathname; }
 function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
 
-var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null };
+var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null, settings: null, cardsCache: null, staffCache: null };
 var root = document.getElementById('root');
 
 // ============================ РОУТИНГ ПРИ ЗАГРУЗКЕ ============================
@@ -364,6 +405,14 @@ function renderApp(prefillCardId) {
 
   if (prefillCardId) { go('scan'); setTimeout(function () { lookupCard(prefillCardId); }, 60); }
   else go('scan');
+
+  loadSettingsOnce();
+}
+
+/** Настройки (фон наклейки, позиция QR) грузятся один раз за сессию и кэшируются — наклейки нигде не ждут лишний запрос */
+function loadSettingsOnce() {
+  if (state.settings) return;
+  apiGet('getSettings', {}).then(function (s) { state.settings = s || {}; }).catch(function () { state.settings = {}; });
 }
 
 function go(name) {
@@ -593,6 +642,12 @@ function renderScanResult(card) {
       '<button class="btn-secondary" style="width:100%;margin-top:12px;" onclick="prefillNewFrom(\'' + esc(card.id) + '\')">Создать карту с этим номером</button></div>';
     return;
   }
+  // Карта существует в таблице, но подписка ещё не оформлена (партия распечатана заранее и лежит в коробке) — предлагаем выдать её клиенту
+  if (!card.endDate) {
+    box.innerHTML = renderActivateForm(card);
+    wireActivateForm(card.id);
+    return;
+  }
   var tel = card.phone ? '<a class="tel" href="tel:' + esc(card.phone) + '">' + esc(card.phone) + '</a>' : '—';
   var daysNote = '';
   if (card.status === 'soon') daysNote = ' · осталось ' + card.daysLeft + ' дн.';
@@ -611,7 +666,7 @@ function renderScanResult(card) {
       '<label>Продлить подписку на</label>' +
       '<select id="rn-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
       '<div class="row-btns" style="margin-top:12px;">' +
-        '<button class="btn-primary" style="margin:0;" onclick="doRenew(\'' + esc(card.id) + '\')">Продлить</button>' +
+        '<button class="btn-primary" style="margin:0;" id="rn-btn" onclick="doRenew(\'' + esc(card.id) + '\')">Продлить</button>' +
         '<button class="btn-ghost" onclick="showQrModal(\'' + esc(card.id) + '\')">Показать QR</button>' +
       '</div>' +
     '</div>';
@@ -619,76 +674,124 @@ function renderScanResult(card) {
 }
 
 function doRenew(id) {
+  var btn = document.getElementById('rn-btn');
   var months = document.getElementById('rn-months').value;
+  setBtnLoading(btn, 'Продлеваем…');
   apiPost('renewSubscription', { username: state.user.username, cardId: id, months: months }).then(function (res) {
     if (res.success) { toast('Продлено до ' + res.card.endDate); renderScanResult(res.card); }
-    else alert(res.error);
-  });
+    else { clearBtnLoading(btn); alert(res.error); }
+  }).catch(function () { clearBtnLoading(btn); });
+}
+
+/** Форма выдачи заранее напечатанной карты конкретному клиенту — появляется автоматически при сканировании ещё не оформленной карты */
+function renderActivateForm(card) {
+  return '<div class="card">' +
+    '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+      '<h2>Новая карта из коробки</h2>' +
+      '<span class="badge s-no_data">Не выдана</span>' +
+    '</div>' +
+    '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(card.id) + '</p>' +
+    '<p class="sub" style="margin-top:10px;">Эта карта уже напечатана, но ещё не привязана к клиенту. Заполните данные, чтобы выдать её сейчас.</p>' +
+    '<label>Имя клиента</label><input id="ac-name">' +
+    '<label>Телефон</label><input id="ac-phone" inputmode="tel" placeholder="+7…">' +
+    '<label>Срок подписки</label>' +
+    '<select id="ac-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+    '<button class="btn-primary" id="ac-save">Выдать карту клиенту</button>' +
+    '<div id="ac-msg" class="msg"></div>' +
+  '</div>';
+}
+
+function wireActivateForm(id) {
+  var btn = document.getElementById('ac-save');
+  btn.onclick = function () {
+    setBtnLoading(btn, 'Оформляем…');
+    apiPost('activateCard', {
+      username: state.user.username, cardId: id,
+      name: document.getElementById('ac-name').value.trim(),
+      phone: document.getElementById('ac-phone').value.trim(),
+      months: document.getElementById('ac-months').value
+    }).then(function (res) {
+      if (res.success) { toast('Карта выдана клиенту'); renderScanResult(res.card); }
+      else { clearBtnLoading(btn); var m = document.getElementById('ac-msg'); m.className = 'msg err'; m.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); });
+  };
 }
 
 function prefillNewFrom(id) { go('new'); setTimeout(function () { var el = document.getElementById('nw-id'); if (el) el.value = id; }, 50); }
 
 // ============================ ВКЛАДКА: ВСЕ КАРТЫ ============================
 function viewList(v) {
+  var cached = state.cardsCache;
   v.innerHTML =
-    '<div class="stats" id="stats"></div>' +
+    '<div class="stats" id="stats">' + (cached ? statsHtml(cached.stats) : skeletonStats()) + '</div>' +
     '<div class="card">' +
       '<h2 style="margin-bottom:12px;">Все карты</h2>' +
       '<input id="ls-search" placeholder="Поиск по номеру, имени или телефону">' +
-      '<div class="clist" id="ls-body" style="margin-top:14px;"><p class="sub">Загрузка…</p></div>' +
+      '<div class="clist" id="ls-body" style="margin-top:14px;">' + (cached ? cardsListHtml(cached.cards) : skeletonRows(4)) + '</div>' +
     '</div>';
   document.getElementById('ls-search').addEventListener('input', debounce(refreshList, 250));
-  loadStats();
+  if (cached) wireListRows(cached.cards);
+  // если кэш уже есть — показываем его мгновенно, а актуальные данные подтягиваем в фоне без мигания «Загрузка…»
   refreshList();
 }
 
-function loadStats() {
-  apiGet('getStats', {}).then(function (s) {
-    var el = document.getElementById('stats'); if (!el) return;
-    el.innerHTML =
-      '<div class="stat"><div class="n">' + s.total + '</div><div class="l">Всего</div></div>' +
-      '<div class="stat a"><div class="n">' + s.active + '</div><div class="l">Активны</div></div>' +
-      '<div class="stat w"><div class="n">' + s.soon + '</div><div class="l">Скоро</div></div>' +
-      '<div class="stat e"><div class="n">' + s.expired + '</div><div class="l">Истекли</div></div>';
+function statsHtml(s) {
+  return '<div class="stat"><div class="n">' + s.total + '</div><div class="l">Всего</div></div>' +
+    '<div class="stat a"><div class="n">' + s.active + '</div><div class="l">Активны</div></div>' +
+    '<div class="stat w"><div class="n">' + s.soon + '</div><div class="l">Скоро</div></div>' +
+    '<div class="stat e"><div class="n">' + s.expired + '</div><div class="l">Истекли</div></div>';
+}
+
+function cardsListHtml(cards) {
+  if (!cards || !cards.length) return '<p class="sub" style="margin:0;">Ничего не найдено.</p>';
+  return cards.map(function (c) {
+    var meta = [];
+    if (c.phone) meta.push(esc(c.phone));
+    if (c.endDate) meta.push('до ' + esc(c.endDate));
+    return '<div class="citem" data-row="' + esc(c.id) + '">' +
+      '<div class="who">' +
+        '<div class="nm">' + esc(c.name || 'Без имени') + '</div>' +
+        '<div class="meta">' + meta.join(' · ') + '</div>' +
+        '<div class="cid">' + esc(c.id) + '</div>' +
+      '</div>' +
+      '<div class="right">' +
+        '<span class="badge s-' + c.status + '">' + STATUS_LABEL[c.status] + '</span>' +
+        '<div style="display:flex; gap:6px;">' +
+          '<span class="icon-btn" title="QR-код" data-qr="' + esc(c.id) + '">' + ICON.qr + '</span>' +
+          '<span class="icon-btn" title="Изменить" data-edit="' + esc(c.id) + '">' + ICON.edit + '</span>' +
+          '<span class="icon-btn" title="Удалить" data-del="' + esc(c.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function wireListRows(cards) {
+  var body = document.getElementById('ls-body'); if (!body) return;
+  cards.forEach(function (c) {
+    var row = body.querySelector('[data-row="' + cssEsc(c.id) + '"]'); if (!row) return;
+    row.querySelector('[data-qr]').onclick = function () { showQrModal(c.id); };
+    row.querySelector('[data-edit]').onclick = function () { showEditModal(c); };
+    row.querySelector('[data-del]').onclick = function () { confirmDeleteCard(c, row); };
   });
 }
+
+function cssEsc(s) { return String(s).replace(/["\\]/g, '\\$&'); }
 
 function refreshList() {
   var qEl = document.getElementById('ls-search');
   var q = qEl ? qEl.value : '';
-  apiGet('listCards', { q: q }).then(function (cards) {
+  apiGet('getCardsScreen', { q: q }).then(function (res) {
+    if (!res || res.error) return;
+    if (!q) state.cardsCache = res; // кэшируем только незафильтрованный список — именно его показываем при повторном открытии вкладки
+    var statsEl = document.getElementById('stats'); if (statsEl) statsEl.innerHTML = statsHtml(res.stats);
     var body = document.getElementById('ls-body'); if (!body) return;
-    if (!cards || !cards.length) { body.innerHTML = '<p class="sub" style="margin:0;">Ничего не найдено.</p>'; return; }
-    body.innerHTML = '';
-    cards.forEach(function (c) {
-      var div = document.createElement('div');
-      div.className = 'citem';
-      var meta = [];
-      if (c.phone) meta.push(esc(c.phone));
-      if (c.endDate) meta.push('до ' + esc(c.endDate));
-      div.innerHTML =
-        '<div class="who">' +
-          '<div class="nm">' + esc(c.name || 'Без имени') + '</div>' +
-          '<div class="meta">' + meta.join(' · ') + '</div>' +
-          '<div class="cid">' + esc(c.id) + '</div>' +
-        '</div>' +
-        '<div class="right">' +
-          '<span class="badge s-' + c.status + '">' + STATUS_LABEL[c.status] + '</span>' +
-          '<div style="display:flex; gap:6px;">' +
-            '<span class="icon-btn" title="QR-код" data-qr="' + esc(c.id) + '">' + ICON.qr + '</span>' +
-            '<span class="icon-btn" title="Изменить" data-edit="' + esc(c.id) + '">' + ICON.edit + '</span>' +
-            '<span class="icon-btn" title="Удалить" data-del="' + esc(c.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
-          '</div>' +
-        '</div>';
-      div.querySelector('[data-qr]').onclick = function () { showQrModal(c.id); };
-      div.querySelector('[data-edit]').onclick = function () { showEditModal(c); };
-      div.querySelector('[data-del]').onclick = function () { confirmDeleteCard(c); };
-      body.appendChild(div);
-    });
+    body.innerHTML = cardsListHtml(res.cards);
+    wireListRows(res.cards);
   });
 }
 
-function confirmDeleteCard(c) {
+function confirmDeleteCard(c, rowEl) {
   openModal(
     '<h2>Удалить карту?</h2>' +
     '<p class="sub">' + esc(c.name || 'Без имени') + ' · ' + esc(c.id) + '<br>Действие необратимо.</p>' +
@@ -697,12 +800,17 @@ function confirmDeleteCard(c) {
       '<button class="btn-danger" id="md-del">Удалить</button>' +
     '</div>'
   );
-  document.getElementById('md-del').onclick = function () {
+  var btn = document.getElementById('md-del');
+  btn.onclick = function () {
+    setBtnLoading(btn, 'Удаляем…');
+    closeModal(); // закрываем сразу — не заставляем ждать ответ сервера, чтобы продолжить работу
+    if (rowEl) { rowEl.classList.add('removing'); setTimeout(function () { if (rowEl.parentNode) rowEl.remove(); }, 180); }
+    if (state.cardsCache) state.cardsCache.cards = state.cardsCache.cards.filter(function (x) { return x.id !== c.id; });
+    toast('Карта удаляется…');
     apiPost('deleteCard', { cardId: c.id }).then(function (res) {
-      closeModal();
-      if (res.success) { toast('Карта удалена'); refreshList(); loadStats(); }
-      else alert(res.error);
-    });
+      if (res.success) { toast('Карта удалена'); }
+      else { alert(res.error); refreshList(); } // если сервер отказал — переcобираем список, чтобы вернуть строку обратно
+    }).catch(function () { refreshList(); });
   };
 }
 
@@ -765,9 +873,11 @@ function viewNew(v) {
     apiGet('generateCardId', {}).then(function (id) { document.getElementById('nw-id').value = id; });
   };
   document.getElementById('nw-create').onclick = function () {
+    var btn = this;
     var id = document.getElementById('nw-id').value.trim();
     var msg = document.getElementById('nw-msg');
     if (!id) { msg.className = 'msg err'; msg.textContent = 'Укажите или сгенерируйте номер карты'; return; }
+    setBtnLoading(btn, 'Создаём…');
     apiPost('createCard', {
       username: state.user.username, cardId: id,
       name: document.getElementById('nw-name').value,
@@ -775,6 +885,7 @@ function viewNew(v) {
       months: document.getElementById('nw-months').value,
       notes: document.getElementById('nw-notes').value
     }).then(function (res) {
+      clearBtnLoading(btn);
       if (!res.success) { msg.className = 'msg err'; msg.textContent = res.error; return; }
       msg.textContent = '';
       var done = document.getElementById('nw-done');
@@ -784,7 +895,7 @@ function viewNew(v) {
         '<div style="display:flex; justify-content:center;">' + cardStickerHtml(res.card.id) + '</div>' +
         '<div class="row-btns" style="margin-top:14px;"><button class="btn-secondary" onclick="printCards([\'' + esc(res.card.id) + '\'])">Распечатать наклейку</button>' +
         '<button class="btn-ghost" onclick="go(\'new\')">Ещё одна</button></div>';
-    });
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
   };
 }
 
@@ -805,13 +916,17 @@ function viewPrint(v) {
       '<button class="btn-secondary no-print" id="pr-print" style="width:100%; margin-top:16px;">Распечатать лист</button>' +
     '</div>';
   document.getElementById('pr-gen').onclick = function () {
+    var btn = this;
     var count = parseInt(document.getElementById('pr-count').value, 10) || 1;
+    setBtnLoading(btn, 'Готовим наклейки…');
     apiPost('reserveNewCardIds', { count: count }).then(function (ids) {
+      clearBtnLoading(btn);
       state.lastBatchIds = ids || [];
       var grid = document.getElementById('pr-grid');
       grid.innerHTML = state.lastBatchIds.map(cardStickerHtml).join('');
       document.getElementById('pr-preview-card').classList.remove('hidden');
-    });
+      state.cardsCache = null; // список карт пополнился — при следующем открытии «Карт» подтянем свежие данные
+    }).catch(function () { clearBtnLoading(btn); });
   };
   document.getElementById('pr-print').onclick = function () {
     printCards(state.lastBatchIds || []);
@@ -820,41 +935,51 @@ function viewPrint(v) {
 
 // ============================ ВКЛАДКА: СОТРУДНИКИ (только админ) ============================
 function viewStaff(v) {
+  var cached = state.staffCache;
   v.innerHTML =
     '<div class="card">' +
       '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
         '<h2 style="margin:0;">Сотрудники</h2>' +
         '<button class="btn-secondary btn-sm" onclick="showUserModal(null)">+ Добавить</button>' +
       '</div>' +
-      '<div class="clist" id="st-body"><p class="sub">Загрузка…</p></div>' +
+      '<div class="clist" id="st-body">' + (cached ? staffListHtml(cached) : skeletonRows(3)) + '</div>' +
     '</div>';
+  if (cached) wireStaffRows(cached);
   refreshStaff();
+}
+
+function staffListHtml(users) {
+  return (users || []).map(function (usr) {
+    var roleBadge = usr.role === 'admin' ? '<span class="badge s-active">Админ</span>' : '<span class="badge s-no_data">Кассир</span>';
+    var isMe = usr.login.toLowerCase() === state.user.username.toLowerCase();
+    return '<div class="citem" data-urow="' + esc(usr.login) + '">' +
+      '<div class="who"><div class="nm">' + esc(usr.fullName) + (isMe ? ' <span style="color:var(--muted); font-weight:400;">(вы)</span>' : '') + '</div>' +
+        '<div class="meta">логин: ' + esc(usr.login) + '</div></div>' +
+      '<div class="right">' + roleBadge +
+        '<div style="display:flex; gap:6px;">' +
+          '<span class="icon-btn" data-edit>' + ICON.edit + '</span>' +
+          (isMe ? '' : '<span class="icon-btn" data-del style="color:var(--red);">' + ICON.trash + '</span>') +
+        '</div></div>' +
+    '</div>';
+  }).join('');
+}
+
+function wireStaffRows(users) {
+  var body = document.getElementById('st-body'); if (!body) return;
+  (users || []).forEach(function (usr) {
+    var row = body.querySelector('[data-urow="' + cssEsc(usr.login) + '"]'); if (!row) return;
+    row.querySelector('[data-edit]').onclick = function () { showUserModal(usr); };
+    var del = row.querySelector('[data-del]');
+    if (del) del.onclick = function () { confirmDeleteUser(usr, row); };
+  });
 }
 
 function refreshStaff() {
   apiGet('listUsers', {}).then(function (users) {
+    state.staffCache = users || [];
     var body = document.getElementById('st-body'); if (!body) return;
-    body.innerHTML = '';
-    (users || []).forEach(function (usr) {
-      var div = document.createElement('div');
-      div.className = 'citem';
-      var roleBadge = usr.role === 'admin'
-        ? '<span class="badge s-active">Админ</span>'
-        : '<span class="badge s-no_data">Кассир</span>';
-      var isMe = usr.login.toLowerCase() === state.user.username.toLowerCase();
-      div.innerHTML =
-        '<div class="who"><div class="nm">' + esc(usr.fullName) + (isMe ? ' <span style="color:var(--muted); font-weight:400;">(вы)</span>' : '') + '</div>' +
-          '<div class="meta">логин: ' + esc(usr.login) + '</div></div>' +
-        '<div class="right">' + roleBadge +
-          '<div style="display:flex; gap:6px;">' +
-            '<span class="icon-btn" data-edit>' + ICON.edit + '</span>' +
-            (isMe ? '' : '<span class="icon-btn" data-del style="color:var(--red);">' + ICON.trash + '</span>') +
-          '</div></div>';
-      div.querySelector('[data-edit]').onclick = function () { showUserModal(usr); };
-      var del = div.querySelector('[data-del]');
-      if (del) del.onclick = function () { confirmDeleteUser(usr); };
-      body.appendChild(div);
-    });
+    body.innerHTML = staffListHtml(users);
+    wireStaffRows(users);
   });
 }
 
@@ -874,6 +999,7 @@ function showUserModal(usr) {
     '<div id="us-msg" class="msg"></div>'
   );
   document.getElementById('us-save').onclick = function () {
+    var btn = this;
     var payload = {
       actorRole: state.user.role,
       login: document.getElementById('us-login').value.trim(),
@@ -882,16 +1008,17 @@ function showUserModal(usr) {
       fullName: document.getElementById('us-name').value.trim()
     };
     var req;
+    setBtnLoading(btn, isNew ? 'Создаём…' : 'Сохраняем…');
     if (isNew) req = apiPost('addUser', payload);
     else { payload.origLogin = usr.login; req = apiPost('updateUser', payload); }
     req.then(function (res) {
       if (res.success) { closeModal(); toast('Сохранено'); refreshStaff(); }
-      else { var m = document.getElementById('us-msg'); m.className = 'msg err'; m.textContent = res.error; }
-    });
+      else { clearBtnLoading(btn); var m = document.getElementById('us-msg'); m.className = 'msg err'; m.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); });
   };
 }
 
-function confirmDeleteUser(usr) {
+function confirmDeleteUser(usr, rowEl) {
   openModal(
     '<h2>Удалить сотрудника?</h2>' +
     '<p class="sub">' + esc(usr.fullName) + ' (' + esc(usr.login) + ')</p>' +
@@ -901,17 +1028,21 @@ function confirmDeleteUser(usr) {
     '</div>'
   );
   document.getElementById('du-btn').onclick = function () {
+    closeModal(); // не ждём ответ сервера, чтобы закрыть модалку — само удаление идёт в фоне
+    if (rowEl) { rowEl.classList.add('removing'); setTimeout(function () { if (rowEl.parentNode) rowEl.remove(); }, 180); }
+    if (state.staffCache) state.staffCache = state.staffCache.filter(function (u) { return u.login !== usr.login; });
+    toast('Сотрудник удаляется…');
     apiPost('deleteUser', { actorRole: state.user.role, actorLogin: state.user.username, login: usr.login }).then(function (res) {
-      closeModal();
-      if (res.success) { toast('Сотрудник удалён'); refreshStaff(); }
-      else alert(res.error);
-    });
+      if (res.success) { toast('Сотрудник удалён'); }
+      else { alert(res.error); refreshStaff(); } // если сервер отказал (например, «нельзя удалить последнего админа») — вернём список как есть
+    }).catch(function () { refreshStaff(); });
   };
 }
 
 // ============================ ВКЛАДКА: ЕЩЁ (пароль, экспорт) ============================
 function viewSettings(v) {
-  var adminExtra = state.user.role === 'admin'
+  var isAdmin = state.user.role === 'admin';
+  var adminExtra = isAdmin
     ? '<div class="card"><h2>Данные</h2><p class="sub">Скачать все карты в CSV (открывается в Excel).</p>' +
       '<button class="btn-ghost" style="width:100%;" onclick="exportCsv()">Скачать CSV</button></div>'
     : '';
@@ -923,19 +1054,131 @@ function viewSettings(v) {
       '<button class="btn-primary" id="pw-save">Сменить пароль</button>' +
       '<div id="pw-msg" class="msg"></div>' +
     '</div>' + adminExtra +
+    (isAdmin ? '<div class="card" id="bg-card"><h2>Фон для наклейки карты</h2><p class="sub">Загрузка…</p></div>' : '') +
     '<div class="card"><h2>Как выдавать карты клиентам</h2>' +
     '<p class="sub" style="margin:0;">Клиент может сам навести камеру телефона на QR своей карты — откроется страница со статусом подписки и датой окончания, без каких-либо данных других клиентов.</p></div>';
   document.getElementById('pw-save').onclick = function () {
+    var btn = this;
     var msg = document.getElementById('pw-msg');
+    setBtnLoading(btn, 'Меняем…');
     apiPost('changePassword', {
       username: state.user.username,
       oldPassword: document.getElementById('pw-old').value,
       newPassword: document.getElementById('pw-new').value
     }).then(function (res) {
+      clearBtnLoading(btn);
       if (res.success) { msg.className = 'msg ok'; msg.textContent = 'Пароль изменён.'; document.getElementById('pw-old').value=''; document.getElementById('pw-new').value=''; }
       else { msg.className = 'msg err'; msg.textContent = res.error; }
-    });
+    }).catch(function () { clearBtnLoading(btn); });
   };
+  if (isAdmin) renderBgSettings();
+}
+
+/** Блок настроек фона наклейки — грузим свежие настройки при каждом открытии вкладки, чтобы админ всегда видел актуальное состояние */
+function renderBgSettings() {
+  apiGet('getSettings', {}).then(function (s) {
+    state.settings = s;
+    var card = document.getElementById('bg-card');
+    if (!card) return; // ушли с вкладки, пока грузилось
+    card.innerHTML =
+      '<h2>Фон для наклейки карты</h2>' +
+      '<p class="sub">Загрузите картинку болванки — она станет фоном наклейки вместо стандартного шаблона, а QR-код автоматически ляжет поверх в заданном месте. Применяется сразу везде: во вкладках «Карты», «Новая» и «Печать».</p>' +
+      '<input type="file" accept="image/*" id="bg-file">' +
+      '<div class="bg-preview-wrap" id="bg-preview">' + (s.backgroundImageUrl ? stickerHtmlWithBg(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize, 'LC-000000') : stickerHtmlPlain('LC-000000')) + '</div>' +
+      '<label>Смещение QR по горизонтали (%)</label><input type="range" id="bg-x" min="0" max="75" value="' + s.qrX + '">' +
+      '<label>Смещение QR по вертикали (%)</label><input type="range" id="bg-y" min="0" max="75" value="' + s.qrY + '">' +
+      '<label>Размер QR (%)</label><input type="range" id="bg-size" min="15" max="70" value="' + s.qrSize + '">' +
+      '<button class="btn-primary" id="bg-save">Сохранить фон</button>' +
+      (s.backgroundImageUrl ? '<button class="btn-ghost" id="bg-remove" style="width:100%; margin-top:8px;">Убрать фон (вернуть обычный шаблон)</button>' : '') +
+      '<div id="bg-msg" class="msg"></div>';
+    wireBgSettings(s);
+  }).catch(function () {
+    var card = document.getElementById('bg-card');
+    if (card) card.innerHTML = '<h2>Фон для наклейки карты</h2><p class="msg err">Не удалось загрузить настройки. Откройте вкладку заново.</p>';
+  });
+}
+
+function wireBgSettings(s) {
+  var pendingDataUrl = null;
+  var currentBgUrl = s.backgroundImageUrl || '';
+
+  function currentSrc() { return pendingDataUrl || currentBgUrl; }
+  function updatePreview() {
+    var x = document.getElementById('bg-x').value, y = document.getElementById('bg-y').value, sz = document.getElementById('bg-size').value;
+    var prev = document.getElementById('bg-preview');
+    prev.innerHTML = currentSrc() ? stickerHtmlWithBg(currentSrc(), x, y, sz, 'LC-000000') : stickerHtmlPlain('LC-000000');
+  }
+
+  document.getElementById('bg-file').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var msg = document.getElementById('bg-msg');
+    msg.className = 'msg'; msg.textContent = 'Обрабатываем изображение…';
+    resizeImageFile(file, 1200, 0.85).then(function (dataUrl) {
+      pendingDataUrl = dataUrl;
+      msg.textContent = '';
+      updatePreview();
+    }).catch(function () { msg.className = 'msg err'; msg.textContent = 'Не удалось прочитать это изображение.'; });
+  });
+
+  ['bg-x', 'bg-y', 'bg-size'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', updatePreview);
+  });
+
+  document.getElementById('bg-save').onclick = function () {
+    var btn = this;
+    var msg = document.getElementById('bg-msg');
+    if (!pendingDataUrl && !currentBgUrl) { msg.className = 'msg err'; msg.textContent = 'Сначала выберите картинку.'; return; }
+    setBtnLoading(btn, 'Сохраняем…');
+    apiPost('saveSettings', {
+      actorRole: state.user.role,
+      backgroundImage: pendingDataUrl || undefined,
+      qrX: document.getElementById('bg-x').value,
+      qrY: document.getElementById('bg-y').value,
+      qrSize: document.getElementById('bg-size').value
+    }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) {
+        state.settings = res.settings;
+        toast('Фон сохранён');
+        renderBgSettings();
+      } else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  };
+
+  var removeBtn = document.getElementById('bg-remove');
+  if (removeBtn) removeBtn.onclick = function () {
+    var btn = this;
+    setBtnLoading(btn, 'Убираем…');
+    apiPost('saveSettings', { actorRole: state.user.role, clearBackground: true }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { state.settings = res.settings; toast('Фон убран'); renderBgSettings(); }
+      else alert(res.error);
+    }).catch(function () { clearBtnLoading(btn); });
+  };
+}
+
+/** Уменьшает выбранную картинку до разумного размера перед отправкой на сервер — быстрее загрузка, меньше места на Диске */
+function resizeImageFile(file, maxDim, quality) {
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        var cw = Math.max(1, Math.round(img.width * scale));
+        var ch = Math.max(1, Math.round(img.height * scale));
+        var canvas = document.createElement('canvas');
+        canvas.width = cw; canvas.height = ch;
+        canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+        resolve(canvas.toDataURL('image/jpeg', quality || 0.85));
+      };
+      img.onerror = function () { reject(new Error('bad image')); };
+      img.src = reader.result;
+    };
+    reader.onerror = function () { reject(new Error('read error')); };
+    reader.readAsDataURL(file);
+  });
 }
 
 function exportCsv() {
@@ -964,6 +1207,32 @@ function toast(text) {
 function debounce(fn, ms) {
   var timer;
   return function () { clearTimeout(timer); timer = setTimeout(fn, ms); };
+}
+
+/** Показывает спиннер на кнопке и блокирует повторное нажатие, пока идёт запрос к серверу */
+function setBtnLoading(btn, label) {
+  if (!btn || btn.dataset.loading === '1') return;
+  btn.dataset.loading = '1';
+  btn.dataset.origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>' + esc(label || 'Секунду…');
+}
+function clearBtnLoading(btn) {
+  if (!btn) return;
+  btn.disabled = false;
+  btn.dataset.loading = '0';
+  if (btn.dataset.origHtml !== undefined) btn.innerHTML = btn.dataset.origHtml;
+}
+
+function skeletonStats() {
+  var out = '';
+  for (var i = 0; i < 4; i++) out += '<div class="skel skel-stat"></div>';
+  return out;
+}
+function skeletonRows(n) {
+  var out = '';
+  for (var i = 0; i < (n || 3); i++) out += '<div class="skel skel-row"></div>';
+  return out;
 }
 </script>
 </body>
