@@ -298,6 +298,7 @@ function viewScan(v) {
       '<p class="sub">Наведите камеру на QR-код карты клиента.</p>' +
       '<div id="reader"></div>' +
       '<button class="btn-primary" id="scan-btn">Включить камеру</button>' +
+      '<div id="scan-status" class="msg" style="text-align:center;"></div>' +
       '<label>Или введите номер карты вручную</label>' +
       '<div style="display:flex; gap:8px;">' +
         '<input id="scan-manual" placeholder="LC-000123" style="flex:1;">' +
@@ -314,23 +315,94 @@ function viewScan(v) {
   });
 }
 
+function scanStatus(text, isErr) {
+  var el = document.getElementById('scan-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'msg' + (isErr ? ' err' : '') + (text ? '' : ' hidden');
+  el.classList.toggle('hidden', !text);
+}
+
 function toggleScanner() {
   var btn = document.getElementById('scan-btn');
-  if (state.scanning) { stopScanner(); return; }
-  state.scanner = new Html5Qrcode('reader');
-  state.scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 230 },
-    function (text) { onScan(text); },
-    function () {}
-  ).then(function () { state.scanning = true; btn.textContent = 'Остановить камеру'; })
-   .catch(function (err) { alert('Не удалось включить камеру: ' + err); });
+  if (state.scanning || state.starting) { stopScanner(); return; }
+
+  state.starting = true;
+  btn.textContent = 'Запуск камеры…';
+  btn.disabled = true;
+  scanStatus('');
+
+  // Полностью пересоздаём контейнер, чтобы не осталось «мёртвого» видео от прошлой сессии
+  var reader = document.getElementById('reader');
+  if (reader) reader.innerHTML = '';
+
+  if (typeof Html5Qrcode === 'undefined') {
+    state.starting = false; btn.disabled = false; btn.textContent = 'Включить камеру';
+    scanStatus('Не загрузилась библиотека сканера. Проверьте интернет и обновите страницу, либо введите номер карты вручную.', true);
+    return;
+  }
+
+  state.scanner = new Html5Qrcode('reader', { verbose: false });
+  var config = { fps: 10, qrbox: { width: 230, height: 230 }, aspectRatio: 1.0 };
+
+  var onFrame = function (text) { onScan(text); };
+  var onErr = function () {}; // покадровые «QR не найден» — игнорируем
+
+  // Попытка 1: просто задняя камера
+  state.scanner.start({ facingMode: 'environment' }, config, onFrame, onErr)
+    .then(afterStart)
+    .catch(function () {
+      // Попытка 2: берём конкретную камеру из списка устройств (надёжнее на части Android)
+      Html5Qrcode.getCameras().then(function (cams) {
+        if (!cams || !cams.length) { failStart('Камеры не найдены на устройстве.'); return; }
+        var back = cams.find(function (c) { return /back|rear|environment|задн/i.test(c.label); });
+        var camId = (back || cams[cams.length - 1]).id;
+        state.scanner.start({ deviceId: { exact: camId } }, config, onFrame, onErr)
+          .then(afterStart)
+          .catch(function (e2) { failStart(describeCamError(e2)); });
+      }).catch(function (e3) { failStart(describeCamError(e3)); });
+    });
+
+  function afterStart() {
+    state.starting = false;
+    state.scanning = true;
+    btn.disabled = false;
+    btn.textContent = 'Остановить камеру';
+    scanStatus('Наведите на QR-код');
+  }
+  function failStart(text) {
+    state.starting = false;
+    state.scanning = false;
+    btn.disabled = false;
+    btn.textContent = 'Включить камеру';
+    var reader = document.getElementById('reader');
+    if (reader) reader.innerHTML = '';
+    scanStatus(text || 'Не удалось включить камеру.', true);
+  }
 }
+
+function describeCamError(err) {
+  var name = (err && (err.name || err.toString())) || '';
+  if (/NotAllowed|Permission/i.test(name)) return 'Доступ к камере запрещён. Разрешите камеру для сайта (значок слева от адреса) и попробуйте снова.';
+  if (/NotFound|Devices|OverConstrained/i.test(name)) return 'Подходящая камера не найдена. Введите номер карты вручную.';
+  if (/NotReadable|TrackStart/i.test(name)) return 'Камера занята другим приложением. Закройте его и попробуйте снова.';
+  return 'Не удалось включить камеру. Можно ввести номер карты вручную.';
+}
+
 function stopScanner() {
-  if (state.scanner && state.scanning) {
-    state.scanner.stop().then(function () { state.scanner.clear(); }).catch(function(){});
+  var btn = document.getElementById('scan-btn');
+  var s = state.scanner;
+  if (s && (state.scanning || state.starting)) {
+    try {
+      s.stop().then(function () { try { s.clear(); } catch (e) {} }).catch(function () {});
+    } catch (e) {}
   }
   state.scanning = false;
-  var btn = document.getElementById('scan-btn'); if (btn) btn.textContent = 'Включить камеру';
+  state.starting = false;
+  if (btn) { btn.disabled = false; btn.textContent = 'Включить камеру'; }
+  scanStatus('');
 }
+
 function onScan(text) {
   stopScanner();
   var id = text; var m = text.match(/[?&]id=([^&]+)/); if (m) id = decodeURIComponent(m[1]);
