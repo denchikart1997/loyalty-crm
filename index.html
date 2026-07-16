@@ -93,16 +93,34 @@
   .public-card .date { font-size: 15px; color: var(--muted); }
   .public-card .date b { color: var(--ink); }
   .public-foot { margin-top: 22px; font-size: 12px; color: var(--muted); }
+  /* Наклейка под физический размер карты (85.6 × 54 мм — стандарт банковской карты) */
+  .pcard { width: 85.6mm; height: 54mm; box-sizing: border-box; padding: 3mm; border: 0.3mm dashed #aaa; border-radius: 2mm; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.8mm; background: #fff; page-break-inside: avoid; break-inside: avoid; }
+  .pcard-head { display: flex; align-items: center; gap: 1.3mm; font-weight: 700; font-size: 9.5px; color: var(--ink); text-align: center; }
+  .pcard-head svg { width: 10px; height: 10px; flex: none; }
+  .pcard-qr { width: 28mm; height: 28mm; }
+  .pcard-qr .qr-slot, .pcard-qr img { width: 100%; height: 100%; display: block; }
+  .pcard-id { font-family: ui-monospace, Menlo, monospace; font-size: 8.5px; color: #666; letter-spacing: .02em; }
+  .sheet { display: grid; grid-template-columns: repeat(2, 85.6mm); gap: 4mm; justify-content: center; }
+  .sheet-hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  #print-sheet { display: none; }
+  @media print {
+    @page { size: A4; margin: 10mm; }
+    body.printing #print-sheet { display: block !important; }
+    body.printing .topbar, body.printing .tabs, body.printing .wrap, body.printing .overlay { display: none !important; }
+  }
   @media print { .topbar, .tabs, .no-print { display: none !important; } .wrap { padding: 0; max-width: 100%; } .card { box-shadow: none; border: none; } .qr-grid { grid-template-columns: repeat(3, 1fr); } }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="print-sheet"></div>
 <script>
 // ============================================================================
 // НАСТРОЙКА: вставьте сюда ссылку вашего Apps Script Web App (заканчивается на /exec)
 // ============================================================================
 var API_BASE_URL = 'https://script.google.com/macros/s/AKfycbzIMqmhLsldw-Wi0btoGDtpgLlXQNIcVrk6tGMB9owQv_wOAD-sw_KUkz3p_ia4mGvK/exec';
+// Название магазина — печатается на наклейках карт
+var SHOP_NAME = 'ФРЭШ & ФРОСТ';
 // ============================================================================
 
 // ---- SVG-иконки (inline, чтобы не тянуть внешние зависимости) ----
@@ -135,7 +153,80 @@ function apiPost(action, payload) {
   return fetch(API_BASE_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) })
     .then(function (r) { return r.json(); });
 }
-function qrImageUrl(text, size) { return 'https://api.qrserver.com/v1/create-qr-code/?size=' + (size||200) + 'x' + (size||200) + '&margin=8&data=' + encodeURIComponent(text); }
+// Несколько независимых сервисов генерации QR — если один заблокирован сетью/оператором, пробуем следующий
+var QR_PROVIDERS = [
+  function (text, size) { return 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&margin=8&data=' + encodeURIComponent(text); },
+  function (text, size) { return 'https://quickchart.io/qr?text=' + encodeURIComponent(text) + '&size=' + size + '&margin=1'; },
+  function (text, size) { return 'https://chart.googleapis.com/chart?cht=qr&chs=' + size + 'x' + size + '&chl=' + encodeURIComponent(text); }
+];
+
+/** Возвращает HTML одного QR (обёрнутый в .qr-slot) с автопереключением на резервный провайдер при сбое */
+function qrImgHtml(text, size, extraStyle) {
+  var url0 = QR_PROVIDERS[0](text, size);
+  return '<div class="qr-slot">' +
+    '<img style="' + (extraStyle || '') + '" data-qrtext="' + encodeURIComponent(text) + '" data-size="' + size + '" data-attempt="0" ' +
+    'width="' + size + '" height="' + size + '" src="' + url0 + '" onerror="qrRetry(this)" onload="this.onerror=null" alt="QR-код">' +
+    '</div>';
+}
+
+function qrRetry(img) {
+  var attempt = parseInt(img.getAttribute('data-attempt') || '0', 10) + 1;
+  var text = decodeURIComponent(img.getAttribute('data-qrtext'));
+  var size = img.getAttribute('data-size') || 220;
+  if (attempt >= QR_PROVIDERS.length) {
+    var slot = img.closest('.qr-slot');
+    if (slot) {
+      slot.innerHTML =
+        '<div style="border:1px dashed var(--line); border-radius:10px; padding:16px; text-align:center;">' +
+          '<p class="msg err" style="margin:0 0 10px;">Не удалось загрузить QR — нет связи с сервисом генерации (проверьте интернет или переключитесь на Wi-Fi).</p>' +
+          '<div class="row-btns">' +
+            '<button class="btn-secondary btn-sm" onclick="qrRetrySlot(this,\'' + encodeURIComponent(text) + '\',' + size + ')">Повторить</button>' +
+            '<button class="btn-ghost btn-sm" onclick="copyLink(\'' + encodeURIComponent(text) + '\')">Скопировать ссылку</button>' +
+          '</div>' +
+        '</div>';
+    }
+    return;
+  }
+  img.setAttribute('data-attempt', attempt);
+  img.src = QR_PROVIDERS[attempt](text, size);
+}
+
+function qrRetrySlot(btn, encText, size) {
+  var slot = btn.closest('.qr-slot');
+  if (slot) slot.outerHTML = qrImgHtml(decodeURIComponent(encText), size, '');
+}
+
+function copyLink(encText) {
+  var text = decodeURIComponent(encText);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { toast('Ссылка скопирована'); })
+      .catch(function () { window.prompt('Скопируйте ссылку:', text); });
+  } else { window.prompt('Скопируйте ссылку:', text); }
+}
+
+function qrImageUrl(text, size) { return QR_PROVIDERS[0](text, size || 200); }
+
+/** HTML одной наклейки-карты (85.6×54мм): логотип+название магазина, QR, номер карты */
+function cardStickerHtml(id) {
+  return '<div class="pcard">' +
+    '<div class="pcard-head">' + ICON.leaf + '<span>' + esc(SHOP_NAME) + '</span></div>' +
+    '<div class="pcard-qr">' + qrImgHtml(cardLink(id), 260, 'width:100%;height:100%;display:block;') + '</div>' +
+    '<div class="pcard-id">' + esc(id) + '</div>' +
+  '</div>';
+}
+
+/** Печать одной или нескольких карт-наклеек: рендерим в скрытый лист и вызываем печать */
+function printCards(ids) {
+  var sheet = document.getElementById('print-sheet');
+  sheet.innerHTML = '<div class="sheet">' + ids.map(cardStickerHtml).join('') + '</div>';
+  document.body.classList.add('printing');
+  window.print();
+}
+window.addEventListener('afterprint', function () {
+  document.body.classList.remove('printing');
+  var sheet = document.getElementById('print-sheet');
+  if (sheet) sheet.innerHTML = '';
+});
 function baseUrl() { return window.location.origin + window.location.pathname; }
 function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
@@ -642,22 +733,12 @@ function showEditModal(c) {
 function showQrModal(id) {
   openModal(
     '<button class="modal-x" onclick="closeModal()">✕</button>' +
-    '<h2>QR-код карты</h2>' +
-    '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px; margin-bottom:14px;">' + esc(id) + '</p>' +
-    '<div id="qr-print-area" style="text-align:center;">' +
-      '<img src="' + qrImageUrl(cardLink(id), 260) + '" alt="QR" style="width:230px; height:230px;">' +
-      '<p style="font-family:ui-monospace,monospace; font-size:13px; margin-top:6px;">' + esc(id) + '</p>' +
-    '</div>' +
-    '<button class="btn-primary no-print" onclick="printSingleQr(\'' + esc(id) + '\')">Распечатать</button>'
+    '<h2>Наклейка на карту</h2>' +
+    '<p class="sub" style="margin-bottom:14px;">Размер — стандартная банковская карта (85.6 × 54 мм). Печатается точно в размер.</p>' +
+    '<div style="display:flex; justify-content:center; padding:8px 0 4px;">' + cardStickerHtml(id) + '</div>' +
+    '<button class="btn-primary no-print" onclick="printCards([\'' + esc(id) + '\'])">Распечатать наклейку</button>' +
+    '<p class="sheet-hint no-print">В диалоге печати выберите масштаб «100% / Фактический размер» — не «По размеру страницы», иначе размер съедет.</p>'
   );
-}
-
-function printSingleQr(id) {
-  var w = window.open('', '_blank');
-  w.document.write('<html><head><title>QR ' + esc(id) + '</title></head><body style="text-align:center; font-family:sans-serif; padding-top:40px;">' +
-    '<img src="' + qrImageUrl(cardLink(id), 300) + '" style="width:280px;height:280px;"><p style="font-family:monospace;">' + esc(id) + '</p>' +
-    '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},300);}</scr' + 'ipt></body></html>');
-  w.document.close();
 }
 
 // ============================ ВКЛАДКА: НОВАЯ КАРТА ============================
@@ -699,10 +780,9 @@ function viewNew(v) {
       var done = document.getElementById('nw-done');
       done.classList.remove('hidden');
       done.innerHTML =
-        '<p style="font-weight:700; margin:0 0 10px;">Карта создана</p>' +
-        '<img src="' + qrImageUrl(cardLink(res.card.id), 260) + '" style="width:200px;height:200px;">' +
-        '<p style="font-family:ui-monospace,monospace; font-size:13px;">' + esc(res.card.id) + '</p>' +
-        '<div class="row-btns"><button class="btn-secondary" onclick="printSingleQr(\'' + esc(res.card.id) + '\')">Распечатать QR</button>' +
+        '<p style="font-weight:700; margin:0 0 12px;">Карта создана</p>' +
+        '<div style="display:flex; justify-content:center;">' + cardStickerHtml(res.card.id) + '</div>' +
+        '<div class="row-btns" style="margin-top:14px;"><button class="btn-secondary" onclick="printCards([\'' + esc(res.card.id) + '\'])">Распечатать наклейку</button>' +
         '<button class="btn-ghost" onclick="go(\'new\')">Ещё одна</button></div>';
     });
   };
@@ -712,27 +792,30 @@ function viewNew(v) {
 function viewPrint(v) {
   v.innerHTML =
     '<div class="card no-print">' +
-      '<h2>Печать QR пакетом</h2>' +
-      '<p class="sub">Создаёт новые номера карт (со статусом «ожидает выдачи») и готовит QR для печати. Имя клиента впишете при выдаче карты.</p>' +
-      '<label>Сколько карт</label><input id="pr-count" type="number" value="9" min="1" max="60">' +
-      '<button class="btn-primary" id="pr-gen">Сгенерировать QR</button>' +
+      '<h2>Печать наклеек на карты</h2>' +
+      '<p class="sub">Создаёт новые номера карт («ожидает выдачи») и готовит лист наклеек 85.6×54мм — точно под болванку. Имя клиента впишете при выдаче карты.</p>' +
+      '<label>Сколько карт (по 2 в ряд на листе А4)</label><input id="pr-count" type="number" value="10" min="1" max="40">' +
+      '<button class="btn-primary" id="pr-gen">Сгенерировать наклейки</button>' +
       '<p class="sub" style="margin:14px 0 0;">Уже созданные карты можно распечатать в любой момент из вкладки «Карты» — у каждой есть кнопка с QR.</p>' +
     '</div>' +
-    '<div class="card"><div class="qr-grid" id="pr-grid"></div>' +
-    '<button class="btn-secondary no-print hidden" id="pr-print" style="width:100%; margin-top:14px;">Распечатать страницу</button></div>';
+    '<div class="card hidden" id="pr-preview-card">' +
+      '<h2>Предпросмотр листа</h2>' +
+      '<p class="sheet-hint no-print" style="margin:0 0 14px;">Печатайте на самоклеящейся бумаге. В диалоге печати обязательно выберите масштаб «100% / Фактический размер» (НЕ «По размеру страницы») — иначе наклейки выйдут не в размер карты.</p>' +
+      '<div class="sheet" id="pr-grid" style="justify-content:flex-start;"></div>' +
+      '<button class="btn-secondary no-print" id="pr-print" style="width:100%; margin-top:16px;">Распечатать лист</button>' +
+    '</div>';
   document.getElementById('pr-gen').onclick = function () {
     var count = parseInt(document.getElementById('pr-count').value, 10) || 1;
     apiPost('reserveNewCardIds', { count: count }).then(function (ids) {
-      var grid = document.getElementById('pr-grid'); grid.innerHTML = '';
-      (ids || []).forEach(function (id) {
-        var cell = document.createElement('div'); cell.className = 'qr-cell';
-        cell.innerHTML = '<img src="' + qrImageUrl(cardLink(id), 150) + '" alt="' + esc(id) + '"><div class="cap">' + esc(id) + '</div>';
-        grid.appendChild(cell);
-      });
-      document.getElementById('pr-print').classList.remove('hidden');
+      state.lastBatchIds = ids || [];
+      var grid = document.getElementById('pr-grid');
+      grid.innerHTML = state.lastBatchIds.map(cardStickerHtml).join('');
+      document.getElementById('pr-preview-card').classList.remove('hidden');
     });
   };
-  document.getElementById('pr-print').onclick = function () { window.print(); };
+  document.getElementById('pr-print').onclick = function () {
+    printCards(state.lastBatchIds || []);
+  };
 }
 
 // ============================ ВКЛАДКА: СОТРУДНИКИ (только админ) ============================
