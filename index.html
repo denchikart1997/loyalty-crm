@@ -3,545 +3,734 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Карты лояльности — CRM</title>
+<title>Карты лояльности</title>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root {
-    --bg: #f4f6f8; --card: #ffffff; --primary: #2563eb; --text: #1f2430; --muted: #6b7280;
-    --border: #e5e7eb; --green: #16a34a; --green-bg: #e9f9ee; --red: #dc2626; --red-bg: #fdecec; --radius: 12px;
+    --bg: #f3f7f0; --surface: #ffffff; --ink: #16261b; --muted: #6b7c70; --line: #e2ebdd;
+    --brand: #2f8f4e; --brand-dark: #24713e; --brand-soft: #e7f4ea;
+    --amber: #c9821b; --amber-soft: #fdf1dd; --red: #c8402f; --red-soft: #fbe8e5;
+    --radius: 14px; --shadow: 0 1px 2px rgba(20,40,25,.05), 0 6px 20px rgba(20,40,25,.04);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
-  .wrap { max-width: 560px; margin: 0 auto; padding: 16px; padding-bottom: 90px; }
-  .card { background: var(--card); border-radius: var(--radius); padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 16px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 0 0 12px; }
-  p.subtitle { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
-  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
-  input, select { width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; background: #fff; }
-  button { cursor: pointer; border: none; border-radius: 8px; padding: 12px 16px; font-size: 15px; font-weight: 600; transition: opacity .15s; }
-  button:active { opacity: 0.8; }
-  .btn-primary { background: var(--primary); color: #fff; width: 100%; margin-top: 16px; }
-  .btn-secondary { background: #eef1f5; color: var(--text); }
-  .btn-small { padding: 8px 12px; font-size: 13px; }
-  .error { color: var(--red); font-size: 13px; margin-top: 8px; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; }
+  body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.45; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 16px 16px 96px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  h2 { font-size: 16px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h3 { font-size: 12px; margin: 0 0 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 5px; font-weight: 600; }
+  input, select { width: 100%; padding: 12px 13px; border: 1px solid var(--line); border-radius: 10px; font-size: 15px; background: #fff; color: var(--ink); font-family: var(--font); transition: border-color .15s, box-shadow .15s; }
+  input:focus, select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+  button { cursor: pointer; border: none; border-radius: 10px; padding: 12px 16px; font-size: 15px; font-weight: 600; font-family: var(--font); transition: transform .05s, background .15s, opacity .15s; }
+  button:active { transform: scale(.98); }
+  .btn-primary { background: var(--brand); color: #fff; width: 100%; margin-top: 16px; }
+  .btn-primary:hover { background: var(--brand-dark); }
+  .btn-secondary { background: var(--brand-soft); color: var(--brand-dark); }
+  .btn-ghost { background: #f1f4ef; color: var(--ink); }
+  .btn-danger { background: var(--red-soft); color: var(--red); }
+  .btn-sm { padding: 8px 12px; font-size: 13px; border-radius: 8px; }
+  .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row-btns > button { flex: 1; min-width: 110px; }
+  .msg { font-size: 13px; margin-top: 10px; }
+  .msg.err { color: var(--red); } .msg.ok { color: var(--brand-dark); }
   .hidden { display: none !important; }
-  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: var(--card); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
-  .topbar .who { font-size: 13px; color: var(--muted); }
-  .topbar .who b { color: var(--text); }
-  .logout { background: none; color: var(--muted); font-weight: 400; font-size: 13px; padding: 6px; }
-  .tabs { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--card); border-top: 1px solid var(--border); z-index: 10; }
-  .tab { flex: 1; text-align: center; padding: 10px 4px; font-size: 12px; color: var(--muted); background: none; border-radius: 0; font-weight: 500; }
-  .tab.active { color: var(--primary); }
-  #reader { width: 100%; border-radius: var(--radius); overflow: hidden; }
-  .status-badge { display: inline-block; padding: 4px 10px; border-radius: 100px; font-size: 13px; font-weight: 600; }
-  .status-active { background: var(--green-bg); color: var(--green); }
-  .status-expired { background: var(--red-bg); color: var(--red); }
-  .status-no_data { background: #f0f0f0; color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; }
-  tr.clickable:active { background: #f4f6f8; }
-  .qr-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
-  .qr-cell { text-align: center; border: 1px dashed var(--border); border-radius: 8px; padding: 8px; }
-  .qr-cell img { max-width: 100%; }
-  .qr-cell .cap { font-size: 11px; margin-top: 4px; font-family: monospace; }
-  .banner { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 13px; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
-  @media print {
-    .topbar, .tabs, .no-print { display: none !important; }
-    .wrap { padding: 0; max-width: 100%; }
-    .card { box-shadow: none; }
-  }
+  .banner { background: var(--amber-soft); border: 1px solid #f2dcae; color: #7a5310; font-size: 13px; padding: 11px 13px; border-radius: 10px; margin-bottom: 14px; }
+  .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(255,255,255,.85); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .brandmark { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+  .brandmark .leaf { width: 26px; height: 26px; flex: none; }
+  .whoami { font-size: 12px; color: var(--muted); text-align: right; line-height: 1.3; }
+  .whoami b { color: var(--ink); display: block; font-size: 13px; }
+  .link-btn { background: none; color: var(--muted); font-weight: 500; font-size: 12.5px; padding: 4px 0; }
+  .tabs { position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; display: flex; background: rgba(255,255,255,.94); backdrop-filter: blur(8px); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+  .tab { flex: 1; text-align: center; padding: 9px 2px 10px; font-size: 11px; color: var(--muted); background: none; border-radius: 0; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .tab svg { width: 21px; height: 21px; }
+  .tab.active { color: var(--brand); }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 100px; font-size: 12.5px; font-weight: 700; }
+  .badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .s-active { background: var(--brand-soft); color: var(--brand-dark); }
+  .s-soon { background: var(--amber-soft); color: var(--amber); }
+  .s-expired { background: var(--red-soft); color: var(--red); }
+  .s-no_data { background: #eef1ec; color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 6px; text-align: center; }
+  .stat .n { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .stat .l { font-size: 10.5px; color: var(--muted); margin-top: 2px; font-weight: 600; }
+  .stat.a .n { color: var(--brand-dark); } .stat.w .n { color: var(--amber); } .stat.e .n { color: var(--red); }
+  .clist { display: flex; flex-direction: column; gap: 10px; }
+  .citem { border: 1px solid var(--line); border-radius: 12px; padding: 13px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .citem .who { min-width: 0; }
+  .citem .nm { font-weight: 700; font-size: 15px; }
+  .citem .meta { font-size: 12.5px; color: var(--muted); margin-top: 2px; word-break: break-word; }
+  .citem .cid { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  .citem .right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+  .icon-btn { background: #f1f4ef; border-radius: 8px; padding: 7px; display: inline-flex; cursor: pointer; }
+  .icon-btn svg { width: 16px; height: 16px; display: block; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 14px; margin: 14px 0; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
+  .kv a.tel { color: var(--brand-dark); text-decoration: none; }
+  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #0d1a12; }
+  #reader:empty { display: none; }
+  .qr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 14px; }
+  .qr-cell { text-align: center; border: 1px dashed var(--line); border-radius: 10px; padding: 10px; background: #fff; }
+  .qr-cell img { width: 100%; height: auto; }
+  .qr-cell .cap { font-size: 11px; margin-top: 5px; font-family: ui-monospace, monospace; color: var(--muted); }
+  .overlay { position: fixed; inset: 0; background: rgba(15,25,18,.5); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { background: #fff; border-radius: 16px; padding: 22px; max-width: 380px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+  .modal-x { float: right; background: #f1f4ef; border-radius: 8px; width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1; color: var(--muted); }
+  .public-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .public-card { max-width: 360px; width: 100%; background: var(--surface); border-radius: 20px; padding: 32px 26px; text-align: center; box-shadow: var(--shadow); border: 1px solid var(--line); }
+  .public-card .leaf { width: 40px; height: 40px; margin: 0 auto 14px; display: block; }
+  .public-status-icon { width: 72px; height: 72px; margin: 6px auto 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .public-status-icon svg { width: 40px; height: 40px; }
+  .pi-active { background: var(--brand-soft); color: var(--brand-dark); }
+  .pi-soon { background: var(--amber-soft); color: var(--amber); }
+  .pi-expired { background: var(--red-soft); color: var(--red); }
+  .public-card .big { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .public-card .date { font-size: 15px; color: var(--muted); }
+  .public-card .date b { color: var(--ink); }
+  .public-foot { margin-top: 22px; font-size: 12px; color: var(--muted); }
+  @media print { .topbar, .tabs, .no-print { display: none !important; } .wrap { padding: 0; max-width: 100%; } .card { box-shadow: none; border: none; } .qr-grid { grid-template-columns: repeat(3, 1fr); } }
 </style>
 </head>
 <body>
-
-<!-- ЭКРАН ВХОДА -->
-<div id="loginScreen" class="wrap" style="padding-top:60px;">
-  <div class="card">
-    <h1>Карты лояльности</h1>
-    <p class="subtitle">Войдите под своим аккаунтом сотрудника</p>
-    <div id="configWarning" class="banner hidden">
-      Не настроен адрес API. Откройте index.html и впишите свой Apps Script exec-URL в переменную <code>API_BASE_URL</code> в начале файла.
-    </div>
-    <label>Логин</label>
-    <input id="loginUsername" autocomplete="username">
-    <label>Пароль</label>
-    <input id="loginPassword" type="password" autocomplete="current-password">
-    <button class="btn-primary" onclick="doLogin()">Войти</button>
-    <div id="loginError" class="error hidden"></div>
-  </div>
-</div>
-
-<!-- ОСНОВНОЕ ПРИЛОЖЕНИЕ -->
-<div id="app" class="hidden">
-  <div class="topbar">
-    <div class="who">Вы вошли как <b id="whoName"></b> <span id="whoRole"></span></div>
-    <button class="logout" onclick="doLogout()">Выйти</button>
-  </div>
-
-  <div class="wrap">
-
-    <!-- СКАНЕР -->
-    <div class="view" id="view-scan">
-      <div class="card">
-        <h2>Сканировать карту</h2>
-        <p class="subtitle">Можно навести камеру прямо здесь — теперь это работает без ограничений (сайт открыт напрямую, не во встроенном окне Google).</p>
-        <div id="reader"></div>
-        <button id="scanBtn" class="btn-primary" onclick="toggleScanner()">Включить камеру</button>
-        <label style="margin-top:16px;">Или введите ID карты вручную</label>
-        <input id="manualId" placeholder="LC-000123">
-        <button class="btn-secondary" style="width:100%; margin-top:8px;" onclick="lookupManual()">Найти</button>
-      </div>
-
-      <div id="cardResult" class="card hidden">
-        <h2 id="resultId"></h2>
-        <p><span id="resultStatus" class="status-badge"></span></p>
-        <table>
-          <tr><td>Имя</td><td id="resultName">—</td></tr>
-          <tr><td>Телефон</td><td id="resultPhone">—</td></tr>
-          <tr><td>Начало</td><td id="resultStart">—</td></tr>
-          <tr><td>Окончание</td><td id="resultEnd">—</td></tr>
-          <tr><td>Заметки</td><td id="resultNotes">—</td></tr>
-        </table>
-
-        <div id="renewBlock">
-          <label>Продлить подписку на</label>
-          <select id="renewMonths">
-            <option value="1">1 месяц</option>
-            <option value="3">3 месяца</option>
-            <option value="6">6 месяцев</option>
-            <option value="12">12 месяцев</option>
-          </select>
-          <button class="btn-primary" onclick="doRenew()">Продлить / оформить</button>
-        </div>
-        <div id="notFoundBlock" class="hidden">
-          <p class="error">Карта с таким ID не найдена в базе.</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- ВСЕ КАРТЫ (админ) -->
-    <div class="view hidden" id="view-list">
-      <div class="card">
-        <h2>Все карты</h2>
-        <input id="searchBox" placeholder="Поиск по ID, имени, телефону" oninput="doSearch()">
-        <div style="overflow-x:auto; margin-top:12px;">
-          <table>
-            <thead><tr><th>ID</th><th>Имя</th><th>До</th><th>Статус</th></tr></thead>
-            <tbody id="listBody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card hidden" id="editCard">
-        <h2>Редактирование <span id="editId"></span></h2>
-        <label>Имя</label>
-        <input id="editName">
-        <label>Телефон</label>
-        <input id="editPhone">
-        <label>Заметки</label>
-        <input id="editNotes">
-        <button class="btn-primary" onclick="saveEdit()">Сохранить</button>
-      </div>
-    </div>
-
-    <!-- НОВАЯ КАРТА (админ) -->
-    <div class="view hidden" id="view-new">
-      <div class="card">
-        <h2>Новая карта</h2>
-        <label>ID карты</label>
-        <input id="newId" placeholder="Нажмите «Сгенерировать»">
-        <button class="btn-secondary btn-small" onclick="genNewId()">Сгенерировать ID</button>
-        <label>Имя клиента</label>
-        <input id="newName">
-        <label>Телефон</label>
-        <input id="newPhone">
-        <label>Срок подписки</label>
-        <select id="newMonths">
-          <option value="1">1 месяц</option>
-          <option value="3">3 месяца</option>
-          <option value="6">6 месяцев</option>
-          <option value="12">12 месяцев</option>
-        </select>
-        <label>Заметки</label>
-        <input id="newNotes">
-        <button class="btn-primary" onclick="doCreate()">Создать карту</button>
-        <div class="hidden" id="newCardQr" style="text-align:center; margin-top:20px;">
-          <p>Карта создана. QR для печати:</p>
-          <img id="newQrCanvas" width="220" height="220" alt="QR-код карты">
-          <p style="font-family:monospace" id="newQrLabel"></p>
-          <button class="btn-secondary no-print" onclick="window.print()">Распечатать</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ПЕЧАТЬ QR ПАКЕТОМ (админ) -->
-    <div class="view hidden" id="view-print">
-      <div class="card no-print">
-        <h2>Пакетная печать QR</h2>
-        <p class="subtitle">Создаёт новые ID со статусом «Зарезервировано» и генерирует QR для печати. Данные клиента впишете позже при выдаче карты.</p>
-        <label>Сколько карт напечатать</label>
-        <input id="printCount" type="number" value="10" min="1" max="60">
-        <button class="btn-primary" onclick="doReserveAndPrint()">Сгенерировать QR</button>
-      </div>
-      <div class="card">
-        <div class="qr-grid" id="printGrid"></div>
-        <button class="btn-secondary no-print hidden" id="printBtn" style="width:100%; margin-top:16px;" onclick="window.print()">Распечатать эту страницу</button>
-      </div>
-    </div>
-
-    <!-- ПАРОЛЬ -->
-    <div class="view hidden" id="view-pass">
-      <div class="card">
-        <h2>Сменить пароль</h2>
-        <label>Текущий пароль</label>
-        <input id="oldPass" type="password">
-        <label>Новый пароль</label>
-        <input id="newPass" type="password">
-        <button class="btn-primary" onclick="doChangePass()">Сменить пароль</button>
-        <div id="passMsg" style="margin-top:8px; font-size:13px;"></div>
-      </div>
-    </div>
-
-  </div>
-
-  <div class="tabs no-print" id="tabs"></div>
-</div>
-
+<div id="root"></div>
 <script>
-  // ==========================================================================
-  // ВАЖНО: впишите сюда ссылку вашего развёрнутого Apps Script Web App
-  // (Развернуть → Управление развёртываниями → скопировать ссылку /exec)
-  // ==========================================================================
-  var API_BASE_URL = 'https://script.google.com/macros/s/AKfycbzIMqmhLsldw-Wi0btoGDtpgLlXQNIcVrk6tGMB9owQv_wOAD-sw_KUkz3p_ia4mGvK/exec';
-  // ==========================================================================
+// ============================================================================
+// НАСТРОЙКА: вставьте сюда ссылку вашего Apps Script Web App (заканчивается на /exec)
+// ============================================================================
+var API_BASE_URL = 'https://script.google.com/macros/s/AKfycbzIMqmhLsldw-Wi0btoGDtpgLlXQNIcVrk6tGMB9owQv_wOAD-sw_KUkz3p_ia4mGvK/exec';
+// ============================================================================
 
-  var currentUser = null;
-  var html5Qr = null;
-  var scannerRunning = false;
+// ---- SVG-иконки (inline, чтобы не тянуть внешние зависимости) ----
+var ICON = {
+  leaf: '<svg class="leaf" viewBox="0 0 24 24" fill="none"><path d="M4 20C4 12 9 5 20 4C20 15 14 20 6 20C6 20 5.5 16 9 12" stroke="#2f8f4e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2M7 12h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  print: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 9V3h12v6M6 18H4a2 2 0 01-2-2v-4a2 2 0 012-2h16a2 2 0 012 2v4a2 2 0 01-2 2h-2M6 14h12v7H6z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  people: '<svg viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  qr: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2M21 19v2M17 21h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>'
+};
 
-  // ---------- ОБЁРТКИ НАД FETCH ----------
+var STATUS_LABEL = { active: 'Активна', soon: 'Скоро истекает', expired: 'Истекла', no_data: 'Нет данных' };
 
-  function apiGet(action, params) {
-    var url = API_BASE_URL + '?action=' + encodeURIComponent(action);
-    for (var key in (params || {})) {
-      url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
-    }
-    return fetch(url).then(function (r) { return r.json(); });
-  }
+// ---- Обёртки над API ----
+function apiGet(action, params) {
+  var url = API_BASE_URL + '?action=' + encodeURIComponent(action);
+  for (var k in (params || {})) url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+  return fetch(url).then(function (r) { return r.json(); });
+}
+function apiPost(action, payload) {
+  var body = Object.assign({ action: action }, payload || {});
+  return fetch(API_BASE_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); });
+}
+function qrImageUrl(text, size) { return 'https://api.qrserver.com/v1/create-qr-code/?size=' + (size||200) + 'x' + (size||200) + '&margin=8&data=' + encodeURIComponent(text); }
+function baseUrl() { return window.location.origin + window.location.pathname; }
+function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
 
-  function apiPost(action, payload) {
-    var body = Object.assign({ action: action }, payload || {});
-    return fetch(API_BASE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // text/plain — чтобы избежать preflight-запроса
-      body: JSON.stringify(body)
-    }).then(function (r) { return r.json(); });
-  }
+var state = { user: null, scanner: null, scanning: false };
+var root = document.getElementById('root');
 
-  function qrImageUrl(text, sizePx) {
-    var size = sizePx || 200;
-    return 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + encodeURIComponent(text);
-  }
+// ============================ РОУТИНГ ПРИ ЗАГРУЗКЕ ============================
+window.addEventListener('DOMContentLoaded', function () {
+  var params = new URLSearchParams(window.location.search);
+  var cardId = params.get('id');
+  // Клиент отсканировал карту (в URL есть id) и НЕ является вошедшим сотрудником → публичная страница
+  var savedUser = sessionStorage.getItem('crmUser');
+  if (cardId && !savedUser) { renderPublic(cardId); return; }
+  if (savedUser) { try { state.user = JSON.parse(savedUser); } catch (e) {} }
+  if (state.user) renderApp(cardId); else renderLogin();
+});
 
-  function cardLink(id) {
-    return window.location.origin + window.location.pathname + '?id=' + encodeURIComponent(id);
-  }
+// ============================ ПУБЛИЧНАЯ СТРАНИЦА ============================
+function renderPublic(cardId) {
+  root.innerHTML = '<div class="public-screen"><div class="public-card">' +
+    ICON.leaf +
+    '<div id="pubBody"><p class="sub" style="margin:20px 0">Проверяем карту…</p></div>' +
+    '<div class="public-foot">Карта лояльности · ' + esc(cardId) + '</div>' +
+    '</div></div>';
 
-  // ---------- ИНИЦИАЛИЗАЦИЯ ----------
-
-  window.addEventListener('DOMContentLoaded', function () {
-    if (!API_BASE_URL || API_BASE_URL.indexOf('ВСТАВЬТЕ') !== -1) {
-      document.getElementById('configWarning').classList.remove('hidden');
-    }
-    var saved = sessionStorage.getItem('loyaltyCrmUser');
-    if (saved) {
-      try {
-        currentUser = JSON.parse(saved);
-        enterApp();
-      } catch (e) { /* игнор */ }
-    }
-  });
-
-  // ---------- ЛОГИН ----------
-
-  function doLogin() {
-    var u = document.getElementById('loginUsername').value.trim();
-    var p = document.getElementById('loginPassword').value;
-    var errEl = document.getElementById('loginError');
-    errEl.classList.add('hidden');
-    if (!u || !p) return;
-
-    apiPost('authenticate', { username: u, password: p }).then(function (res) {
-      if (res.success) {
-        currentUser = { username: u, role: res.role, fullName: res.fullName };
-        sessionStorage.setItem('loyaltyCrmUser', JSON.stringify(currentUser));
-        enterApp();
-      } else {
-        errEl.textContent = res.error || 'Ошибка входа';
-        errEl.classList.remove('hidden');
-      }
-    }).catch(function (e) {
-      errEl.textContent = 'Ошибка соединения с сервером: ' + e.message;
-      errEl.classList.remove('hidden');
-    });
-  }
-
-  function doLogout() {
-    if (scannerRunning) toggleScanner();
-    currentUser = null;
-    sessionStorage.removeItem('loyaltyCrmUser');
-    document.getElementById('app').classList.add('hidden');
-    document.getElementById('loginScreen').classList.remove('hidden');
-    document.getElementById('loginPassword').value = '';
-  }
-
-  function enterApp() {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('app').classList.remove('hidden');
-    document.getElementById('whoName').textContent = currentUser.fullName;
-    document.getElementById('whoRole').textContent = currentUser.role === 'admin' ? '(админ)' : '(кассир)';
-    buildTabs();
-    showView('scan');
-
-    var params = new URLSearchParams(window.location.search);
-    var prefillId = params.get('id');
-    if (prefillId) {
-      document.getElementById('manualId').value = prefillId;
-      lookupCard(prefillId);
-    }
-  }
-
-  // ---------- НАВИГАЦИЯ ----------
-
-  function buildTabs() {
-    var tabs = [{ id: 'scan', label: 'Сканер' }];
-    if (currentUser.role === 'admin') {
-      tabs.push({ id: 'list', label: 'Все карты' });
-      tabs.push({ id: 'new', label: 'Новая карта' });
-      tabs.push({ id: 'print', label: 'Печать QR' });
-    }
-    tabs.push({ id: 'pass', label: 'Пароль' });
-
-    var el = document.getElementById('tabs');
-    el.innerHTML = '';
-    tabs.forEach(function (t) {
-      var b = document.createElement('button');
-      b.className = 'tab';
-      b.id = 'tabbtn-' + t.id;
-      b.textContent = t.label;
-      b.onclick = function () { showView(t.id); };
-      el.appendChild(b);
-    });
-  }
-
-  function showView(name) {
-    document.querySelectorAll('.view').forEach(function (v) { v.classList.add('hidden'); });
-    document.getElementById('view-' + name).classList.remove('hidden');
-    document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-    var btn = document.getElementById('tabbtn-' + name);
-    if (btn) btn.classList.add('active');
-    if (name === 'list') refreshList();
-    if (name !== 'scan' && scannerRunning) toggleScanner();
-  }
-
-  // ---------- СКАНЕР ----------
-
-  function toggleScanner() {
-    var btn = document.getElementById('scanBtn');
-    if (!scannerRunning) {
-      html5Qr = new Html5Qrcode('reader');
-      html5Qr.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: 220 },
-        function (decodedText) { onScanSuccess(decodedText); },
-        function () { /* игнорируем кадры без QR */ }
-      ).then(function () {
-        scannerRunning = true;
-        btn.textContent = 'Остановить камеру';
-      }).catch(function (err) {
-        alert('Не удалось включить камеру: ' + err);
-      });
-    } else {
-      html5Qr.stop().then(function () {
-        html5Qr.clear();
-        scannerRunning = false;
-        btn.textContent = 'Включить камеру';
-      });
-    }
-  }
-
-  function onScanSuccess(text) {
-    if (scannerRunning) toggleScanner();
-    // Если закодирована ссылка вида .../?id=XXXX — вытащим оттуда чистый ID
-    var id = text;
-    var m = text.match(/[?&]id=([^&]+)/);
-    if (m) id = decodeURIComponent(m[1]);
-    document.getElementById('manualId').value = id;
-    lookupCard(id);
-  }
-
-  function lookupManual() {
-    var id = document.getElementById('manualId').value.trim();
-    if (id) lookupCard(id);
-  }
-
-  function lookupCard(id) {
-    apiGet('getCardInfo', { id: id }).then(renderCardResult);
-  }
-
-  function renderCardResult(card) {
-    document.getElementById('cardResult').classList.remove('hidden');
-    document.getElementById('resultId').textContent = card.id;
-
-    if (!card.found) {
-      document.getElementById('renewBlock').classList.add('hidden');
-      document.getElementById('notFoundBlock').classList.remove('hidden');
-      document.getElementById('resultStatus').textContent = '';
-      ['resultName','resultPhone','resultStart','resultEnd','resultNotes'].forEach(function(id){ document.getElementById(id).textContent = '—'; });
+  apiGet('getPublicStatus', { id: cardId }).then(function (res) {
+    var body = document.getElementById('pubBody');
+    if (!res || !res.found) {
+      body.innerHTML = '<div class="public-status-icon pi-expired">' + ICON.x + '</div>' +
+        '<p class="big">Карта не найдена</p><p class="date">Обратитесь к сотруднику магазина</p>';
       return;
     }
-    document.getElementById('notFoundBlock').classList.add('hidden');
-    document.getElementById('renewBlock').classList.remove('hidden');
+    if (res.status === 'expired' || res.status === 'no_data') {
+      body.innerHTML = '<div class="public-status-icon pi-expired">' + ICON.x + '</div>' +
+        '<p class="big">Подписка неактивна</p>' +
+        (res.endDate ? '<p class="date">Истекла <b>' + esc(res.endDate) + '</b></p>' : '<p class="date">Оформите подписку на кассе</p>');
+    } else if (res.status === 'soon') {
+      body.innerHTML = '<div class="public-status-icon pi-soon">' + ICON.clock + '</div>' +
+        '<p class="big">Подписка активна</p>' +
+        '<p class="date">Действует до <b>' + esc(res.endDate) + '</b><br>осталось ' + res.daysLeft + ' дн.</p>';
+    } else {
+      body.innerHTML = '<div class="public-status-icon pi-active">' + ICON.check + '</div>' +
+        '<p class="big">Подписка активна</p>' +
+        '<p class="date">Действует до <b>' + esc(res.endDate) + '</b></p>';
+    }
+  }).catch(function () {
+    document.getElementById('pubBody').innerHTML = '<p class="date">Не удалось проверить карту. Попробуйте позже.</p>';
+  });
+}
 
-    var statusMap = { active: ['Активна', 'status-active'], expired: ['Истекла', 'status-expired'], no_data: ['Нет данных', 'status-no_data'] };
-    var s = statusMap[card.status] || statusMap.no_data;
-    var badge = document.getElementById('resultStatus');
-    badge.textContent = s[0];
-    badge.className = 'status-badge ' + s[1];
+// ============================ ЭКРАН ВХОДА ============================
+function renderLogin() {
+  var warn = (!API_BASE_URL || API_BASE_URL.indexOf('ВСТАВЬТЕ') !== -1)
+    ? '<div class="banner">Не указан адрес API. Откройте index.html и впишите ссылку Apps Script (/exec) в переменную API_BASE_URL.</div>' : '';
+  root.innerHTML =
+    '<div class="wrap" style="padding-top:56px; max-width:420px;">' +
+      '<div class="card">' +
+        '<div class="brandmark" style="margin-bottom:18px; font-size:18px;">' + ICON.leaf + 'Карты лояльности</div>' +
+        warn +
+        '<p class="sub">Вход для сотрудников магазина</p>' +
+        '<label>Логин</label><input id="lg-user" autocomplete="username">' +
+        '<label>Пароль</label><input id="lg-pass" type="password" autocomplete="current-password">' +
+        '<button class="btn-primary" id="lg-btn">Войти</button>' +
+        '<div id="lg-msg" class="msg err hidden"></div>' +
+      '</div>' +
+    '</div>';
+  document.getElementById('lg-btn').onclick = doLogin;
+  document.getElementById('lg-pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+}
 
-    document.getElementById('resultName').textContent = card.name || '—';
-    document.getElementById('resultPhone').textContent = card.phone || '—';
-    document.getElementById('resultStart').textContent = card.startDate || '—';
-    document.getElementById('resultEnd').textContent = card.endDate || '—';
-    document.getElementById('resultNotes').textContent = card.notes || '—';
+function doLogin() {
+  var u = document.getElementById('lg-user').value.trim();
+  var p = document.getElementById('lg-pass').value;
+  var msg = document.getElementById('lg-msg');
+  msg.classList.add('hidden');
+  if (!u || !p) return;
+  var btn = document.getElementById('lg-btn');
+  btn.textContent = 'Входим…'; btn.disabled = true;
+  apiPost('authenticate', { username: u, password: p }).then(function (res) {
+    btn.textContent = 'Войти'; btn.disabled = false;
+    if (res.success) {
+      state.user = { username: u, role: res.role, fullName: res.fullName };
+      sessionStorage.setItem('crmUser', JSON.stringify(state.user));
+      renderApp(null);
+    } else { msg.textContent = res.error || 'Ошибка входа'; msg.classList.remove('hidden'); }
+  }).catch(function (e) {
+    btn.textContent = 'Войти'; btn.disabled = false;
+    msg.textContent = 'Нет связи с сервером: ' + e.message; msg.classList.remove('hidden');
+  });
+}
 
-    window._lastCardId = card.id;
+function doLogout() {
+  stopScanner();
+  state.user = null;
+  sessionStorage.removeItem('crmUser');
+  // убираем ?id из адреса, чтобы после выхода не улететь на публичную страницу
+  history.replaceState(null, '', baseUrl());
+  renderLogin();
+}
+
+// ============================ КАРКАС ПРИЛОЖЕНИЯ ============================
+function renderApp(prefillCardId) {
+  var u = state.user;
+  var roleLabel = u.role === 'admin' ? 'Администратор' : 'Кассир';
+  root.innerHTML =
+    '<div class="topbar">' +
+      '<div class="brandmark">' + ICON.leaf + 'Лояльность</div>' +
+      '<div style="display:flex; align-items:center; gap:14px;">' +
+        '<div class="whoami"><b>' + esc(u.fullName) + '</b>' + roleLabel + '</div>' +
+        '<button class="link-btn" id="tb-logout">Выйти</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="wrap" id="view"></div>' +
+    '<nav class="tabs" id="tabs"></nav>';
+
+  document.getElementById('tb-logout').onclick = doLogout;
+
+  var tabs = [{ id: 'scan', label: 'Сканер', icon: ICON.scan }];
+  tabs.push({ id: 'list', label: 'Карты', icon: ICON.list });
+  tabs.push({ id: 'new', label: 'Новая', icon: ICON.plus });
+  tabs.push({ id: 'print', label: 'Печать', icon: ICON.print });
+  if (u.role === 'admin') tabs.push({ id: 'staff', label: 'Сотрудники', icon: ICON.people });
+  tabs.push({ id: 'settings', label: 'Ещё', icon: ICON.gear });
+  state.tabs = tabs;
+
+  var nav = document.getElementById('tabs');
+  tabs.forEach(function (t) {
+    var b = document.createElement('button');
+    b.className = 'tab'; b.id = 'tab-' + t.id;
+    b.innerHTML = t.icon + '<span>' + t.label + '</span>';
+    b.onclick = function () { go(t.id); };
+    nav.appendChild(b);
+  });
+
+  if (prefillCardId) { go('scan'); setTimeout(function () { lookupCard(prefillCardId); }, 60); }
+  else go('scan');
+}
+
+function go(name) {
+  if (name !== 'scan') stopScanner();
+  state.tabs.forEach(function (t) {
+    var el = document.getElementById('tab-' + t.id);
+    if (el) el.classList.toggle('active', t.id === name);
+  });
+  var v = document.getElementById('view');
+  if (name === 'scan') viewScan(v);
+  else if (name === 'list') viewList(v);
+  else if (name === 'new') viewNew(v);
+  else if (name === 'print') viewPrint(v);
+  else if (name === 'staff') viewStaff(v);
+  else if (name === 'settings') viewSettings(v);
+}
+
+// ============================ ВКЛАДКА: СКАНЕР ============================
+function viewScan(v) {
+  v.innerHTML =
+    '<div class="card">' +
+      '<h2>Сканировать карту</h2>' +
+      '<p class="sub">Наведите камеру на QR-код карты клиента.</p>' +
+      '<div id="reader"></div>' +
+      '<button class="btn-primary" id="scan-btn">Включить камеру</button>' +
+      '<label>Или введите номер карты вручную</label>' +
+      '<div style="display:flex; gap:8px;">' +
+        '<input id="scan-manual" placeholder="LC-000123" style="flex:1;">' +
+        '<button class="btn-secondary" id="scan-find" style="white-space:nowrap;">Найти</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="scan-result"></div>';
+  document.getElementById('scan-btn').onclick = toggleScanner;
+  document.getElementById('scan-find').onclick = function () {
+    var id = document.getElementById('scan-manual').value.trim(); if (id) lookupCard(id);
+  };
+  document.getElementById('scan-manual').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { var id = this.value.trim(); if (id) lookupCard(id); }
+  });
+}
+
+function toggleScanner() {
+  var btn = document.getElementById('scan-btn');
+  if (state.scanning) { stopScanner(); return; }
+  state.scanner = new Html5Qrcode('reader');
+  state.scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 230 },
+    function (text) { onScan(text); },
+    function () {}
+  ).then(function () { state.scanning = true; btn.textContent = 'Остановить камеру'; })
+   .catch(function (err) { alert('Не удалось включить камеру: ' + err); });
+}
+function stopScanner() {
+  if (state.scanner && state.scanning) {
+    state.scanner.stop().then(function () { state.scanner.clear(); }).catch(function(){});
   }
+  state.scanning = false;
+  var btn = document.getElementById('scan-btn'); if (btn) btn.textContent = 'Включить камеру';
+}
+function onScan(text) {
+  stopScanner();
+  var id = text; var m = text.match(/[?&]id=([^&]+)/); if (m) id = decodeURIComponent(m[1]);
+  var inp = document.getElementById('scan-manual'); if (inp) inp.value = id;
+  lookupCard(id);
+}
 
-  function doRenew() {
-    var months = document.getElementById('renewMonths').value;
-    apiPost('renewSubscription', { username: currentUser.username, cardId: window._lastCardId, months: months }).then(function (res) {
-      if (res.success) {
-        renderCardResult(res.card);
-        alert('Подписка продлена до ' + res.card.endDate);
-      } else {
-        alert(res.error);
-      }
+function lookupCard(id) {
+  apiGet('getCardInfo', { id: id }).then(renderScanResult);
+}
+
+function renderScanResult(card) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  if (!card.found) {
+    box.innerHTML = '<div class="card"><h2>Карта ' + esc(card.id) + '</h2>' +
+      '<p class="msg err">Эта карта не найдена в базе.</p>' +
+      '<button class="btn-secondary" style="width:100%;margin-top:12px;" onclick="prefillNewFrom(\'' + esc(card.id) + '\')">Создать карту с этим номером</button></div>';
+    return;
+  }
+  var tel = card.phone ? '<a class="tel" href="tel:' + esc(card.phone) + '">' + esc(card.phone) + '</a>' : '—';
+  var daysNote = '';
+  if (card.status === 'soon') daysNote = ' · осталось ' + card.daysLeft + ' дн.';
+  box.innerHTML =
+    '<div class="card">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+        '<h2>' + esc(card.name || 'Без имени') + '</h2>' +
+        '<span class="badge s-' + card.status + '">' + STATUS_LABEL[card.status] + '</span>' +
+      '</div>' +
+      '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(card.id) + '</p>' +
+      '<dl class="kv">' +
+        '<dt>Телефон</dt><dd>' + tel + '</dd>' +
+        '<dt>Действует до</dt><dd>' + (card.endDate ? esc(card.endDate) + daysNote : '—') + '</dd>' +
+        (card.notes ? '<dt>Заметки</dt><dd style="font-weight:400;">' + esc(card.notes) + '</dd>' : '') +
+      '</dl>' +
+      '<label>Продлить подписку на</label>' +
+      '<select id="rn-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+      '<div class="row-btns" style="margin-top:12px;">' +
+        '<button class="btn-primary" style="margin:0;" onclick="doRenew(\'' + esc(card.id) + '\')">Продлить</button>' +
+        '<button class="btn-ghost" onclick="showQrModal(\'' + esc(card.id) + '\')">Показать QR</button>' +
+      '</div>' +
+    '</div>';
+  state.lastCard = card.id;
+}
+
+function doRenew(id) {
+  var months = document.getElementById('rn-months').value;
+  apiPost('renewSubscription', { username: state.user.username, cardId: id, months: months }).then(function (res) {
+    if (res.success) { toast('Продлено до ' + res.card.endDate); renderScanResult(res.card); }
+    else alert(res.error);
+  });
+}
+
+function prefillNewFrom(id) { go('new'); setTimeout(function () { var el = document.getElementById('nw-id'); if (el) el.value = id; }, 50); }
+
+// ============================ ВКЛАДКА: ВСЕ КАРТЫ ============================
+function viewList(v) {
+  v.innerHTML =
+    '<div class="stats" id="stats"></div>' +
+    '<div class="card">' +
+      '<h2 style="margin-bottom:12px;">Все карты</h2>' +
+      '<input id="ls-search" placeholder="Поиск по номеру, имени или телефону">' +
+      '<div class="clist" id="ls-body" style="margin-top:14px;"><p class="sub">Загрузка…</p></div>' +
+    '</div>';
+  document.getElementById('ls-search').addEventListener('input', debounce(refreshList, 250));
+  loadStats();
+  refreshList();
+}
+
+function loadStats() {
+  apiGet('getStats', {}).then(function (s) {
+    var el = document.getElementById('stats'); if (!el) return;
+    el.innerHTML =
+      '<div class="stat"><div class="n">' + s.total + '</div><div class="l">Всего</div></div>' +
+      '<div class="stat a"><div class="n">' + s.active + '</div><div class="l">Активны</div></div>' +
+      '<div class="stat w"><div class="n">' + s.soon + '</div><div class="l">Скоро</div></div>' +
+      '<div class="stat e"><div class="n">' + s.expired + '</div><div class="l">Истекли</div></div>';
+  });
+}
+
+function refreshList() {
+  var qEl = document.getElementById('ls-search');
+  var q = qEl ? qEl.value : '';
+  apiGet('listCards', { q: q }).then(function (cards) {
+    var body = document.getElementById('ls-body'); if (!body) return;
+    if (!cards || !cards.length) { body.innerHTML = '<p class="sub" style="margin:0;">Ничего не найдено.</p>'; return; }
+    body.innerHTML = '';
+    cards.forEach(function (c) {
+      var div = document.createElement('div');
+      div.className = 'citem';
+      var meta = [];
+      if (c.phone) meta.push(esc(c.phone));
+      if (c.endDate) meta.push('до ' + esc(c.endDate));
+      div.innerHTML =
+        '<div class="who">' +
+          '<div class="nm">' + esc(c.name || 'Без имени') + '</div>' +
+          '<div class="meta">' + meta.join(' · ') + '</div>' +
+          '<div class="cid">' + esc(c.id) + '</div>' +
+        '</div>' +
+        '<div class="right">' +
+          '<span class="badge s-' + c.status + '">' + STATUS_LABEL[c.status] + '</span>' +
+          '<div style="display:flex; gap:6px;">' +
+            '<span class="icon-btn" title="QR-код" data-qr="' + esc(c.id) + '">' + ICON.qr + '</span>' +
+            '<span class="icon-btn" title="Изменить" data-edit="' + esc(c.id) + '">' + ICON.edit + '</span>' +
+            '<span class="icon-btn" title="Удалить" data-del="' + esc(c.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
+          '</div>' +
+        '</div>';
+      div.querySelector('[data-qr]').onclick = function () { showQrModal(c.id); };
+      div.querySelector('[data-edit]').onclick = function () { showEditModal(c); };
+      div.querySelector('[data-del]').onclick = function () { confirmDeleteCard(c); };
+      body.appendChild(div);
     });
-  }
+  });
+}
 
-  // ---------- СПИСОК КАРТ (админ) ----------
-
-  var searchTimer = null;
-  function doSearch() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(refreshList, 250);
-  }
-
-  function refreshList() {
-    var q = document.getElementById('searchBox').value;
-    apiGet('listCards', { q: q }).then(function (cards) {
-      var body = document.getElementById('listBody');
-      body.innerHTML = '';
-      (cards || []).forEach(function (c) {
-        var tr = document.createElement('tr');
-        tr.className = 'clickable';
-        var statusLabel = c.status === 'active' ? 'Активна' : (c.status === 'expired' ? 'Истекла' : '—');
-        tr.innerHTML = '<td>' + c.id + '</td><td>' + (c.name || '—') + '</td><td>' + (c.endDate || '—') + '</td><td>' + statusLabel + '</td>';
-        tr.onclick = function () { openEdit(c); };
-        body.appendChild(tr);
-      });
+function confirmDeleteCard(c) {
+  openModal(
+    '<h2>Удалить карту?</h2>' +
+    '<p class="sub">' + esc(c.name || 'Без имени') + ' · ' + esc(c.id) + '<br>Действие необратимо.</p>' +
+    '<div class="row-btns" style="margin-top:16px;">' +
+      '<button class="btn-ghost" onclick="closeModal()">Отмена</button>' +
+      '<button class="btn-danger" id="md-del">Удалить</button>' +
+    '</div>'
+  );
+  document.getElementById('md-del').onclick = function () {
+    apiPost('deleteCard', { cardId: c.id }).then(function (res) {
+      closeModal();
+      if (res.success) { toast('Карта удалена'); refreshList(); loadStats(); }
+      else alert(res.error);
     });
-  }
+  };
+}
 
-  function openEdit(c) {
-    document.getElementById('editCard').classList.remove('hidden');
-    document.getElementById('editId').textContent = c.id;
-    document.getElementById('editName').value = c.name || '';
-    document.getElementById('editPhone').value = c.phone || '';
-    document.getElementById('editNotes').value = c.notes || '';
-    window._editId = c.id;
-    document.getElementById('editCard').scrollIntoView({ behavior: 'smooth' });
-  }
-
-  function saveEdit() {
+function showEditModal(c) {
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>Изменить карту</h2>' +
+    '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px;">' + esc(c.id) + '</p>' +
+    '<label>Имя клиента</label><input id="ed-name" value="' + esc(c.name) + '">' +
+    '<label>Телефон</label><input id="ed-phone" value="' + esc(c.phone) + '">' +
+    '<label>Заметки</label><input id="ed-notes" value="' + esc(c.notes) + '">' +
+    '<button class="btn-primary" id="ed-save">Сохранить</button>' +
+    '<div id="ed-msg" class="msg"></div>'
+  );
+  document.getElementById('ed-save').onclick = function () {
     apiPost('updateCard', {
-      username: currentUser.username, role: currentUser.role, cardId: window._editId,
-      name: document.getElementById('editName').value,
-      phone: document.getElementById('editPhone').value,
-      notes: document.getElementById('editNotes').value
+      username: state.user.username, cardId: c.id,
+      name: document.getElementById('ed-name').value,
+      phone: document.getElementById('ed-phone').value,
+      notes: document.getElementById('ed-notes').value
     }).then(function (res) {
-      if (res.success) { alert('Сохранено'); refreshList(); } else { alert(res.error); }
+      if (res.success) { closeModal(); toast('Сохранено'); refreshList(); }
+      else { var m = document.getElementById('ed-msg'); m.className = 'msg err'; m.textContent = res.error; }
     });
-  }
+  };
+}
 
-  // ---------- НОВАЯ КАРТА (админ) ----------
+function showQrModal(id) {
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>QR-код карты</h2>' +
+    '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px; margin-bottom:14px;">' + esc(id) + '</p>' +
+    '<div id="qr-print-area" style="text-align:center;">' +
+      '<img src="' + qrImageUrl(cardLink(id), 260) + '" alt="QR" style="width:230px; height:230px;">' +
+      '<p style="font-family:ui-monospace,monospace; font-size:13px; margin-top:6px;">' + esc(id) + '</p>' +
+    '</div>' +
+    '<button class="btn-primary no-print" onclick="printSingleQr(\'' + esc(id) + '\')">Распечатать</button>'
+  );
+}
 
-  function genNewId() {
-    apiGet('generateCardId', {}).then(function (id) {
-      document.getElementById('newId').value = id;
-    });
-  }
+function printSingleQr(id) {
+  var w = window.open('', '_blank');
+  w.document.write('<html><head><title>QR ' + esc(id) + '</title></head><body style="text-align:center; font-family:sans-serif; padding-top:40px;">' +
+    '<img src="' + qrImageUrl(cardLink(id), 300) + '" style="width:280px;height:280px;"><p style="font-family:monospace;">' + esc(id) + '</p>' +
+    '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},300);}</scr' + 'ipt></body></html>');
+  w.document.close();
+}
 
-  function doCreate() {
-    var id = document.getElementById('newId').value.trim();
-    if (!id) { alert('Укажите или сгенерируйте ID карты'); return; }
+// ============================ ВКЛАДКА: НОВАЯ КАРТА ============================
+function viewNew(v) {
+  v.innerHTML =
+    '<div class="card">' +
+      '<h2>Новая карта</h2>' +
+      '<p class="sub">Оформите карту сразу на клиента и распечатайте QR.</p>' +
+      '<label>Номер карты</label>' +
+      '<div style="display:flex; gap:8px;">' +
+        '<input id="nw-id" placeholder="Сгенерируйте номер" style="flex:1;">' +
+        '<button class="btn-secondary" id="nw-gen" style="white-space:nowrap;">Сгенерировать</button>' +
+      '</div>' +
+      '<label>Имя клиента</label><input id="nw-name">' +
+      '<label>Телефон</label><input id="nw-phone" inputmode="tel" placeholder="+7…">' +
+      '<label>Срок подписки</label>' +
+      '<select id="nw-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+      '<label>Заметки</label><input id="nw-notes">' +
+      '<button class="btn-primary" id="nw-create">Создать карту</button>' +
+      '<div id="nw-msg" class="msg"></div>' +
+      '<div id="nw-done" class="hidden" style="text-align:center; margin-top:20px; border-top:1px solid var(--line); padding-top:18px;"></div>' +
+    '</div>';
+  document.getElementById('nw-gen').onclick = function () {
+    apiGet('generateCardId', {}).then(function (id) { document.getElementById('nw-id').value = id; });
+  };
+  document.getElementById('nw-create').onclick = function () {
+    var id = document.getElementById('nw-id').value.trim();
+    var msg = document.getElementById('nw-msg');
+    if (!id) { msg.className = 'msg err'; msg.textContent = 'Укажите или сгенерируйте номер карты'; return; }
     apiPost('createCard', {
-      username: currentUser.username, role: currentUser.role, cardId: id,
-      name: document.getElementById('newName').value,
-      phone: document.getElementById('newPhone').value,
-      months: document.getElementById('newMonths').value,
-      notes: document.getElementById('newNotes').value
+      username: state.user.username, cardId: id,
+      name: document.getElementById('nw-name').value,
+      phone: document.getElementById('nw-phone').value,
+      months: document.getElementById('nw-months').value,
+      notes: document.getElementById('nw-notes').value
     }).then(function (res) {
-      if (!res.success) { alert(res.error); return; }
-      document.getElementById('newCardQr').classList.remove('hidden');
-      document.getElementById('newQrLabel').textContent = res.card.id;
-      document.getElementById('newQrCanvas').src = qrImageUrl(cardLink(res.card.id), 220);
+      if (!res.success) { msg.className = 'msg err'; msg.textContent = res.error; return; }
+      msg.textContent = '';
+      var done = document.getElementById('nw-done');
+      done.classList.remove('hidden');
+      done.innerHTML =
+        '<p style="font-weight:700; margin:0 0 10px;">Карта создана</p>' +
+        '<img src="' + qrImageUrl(cardLink(res.card.id), 260) + '" style="width:200px;height:200px;">' +
+        '<p style="font-family:ui-monospace,monospace; font-size:13px;">' + esc(res.card.id) + '</p>' +
+        '<div class="row-btns"><button class="btn-secondary" onclick="printSingleQr(\'' + esc(res.card.id) + '\')">Распечатать QR</button>' +
+        '<button class="btn-ghost" onclick="go(\'new\')">Ещё одна</button></div>';
     });
-  }
+  };
+}
 
-  // ---------- ПАКЕТНАЯ ПЕЧАТЬ QR (админ) ----------
-
-  function doReserveAndPrint() {
-    var count = parseInt(document.getElementById('printCount').value, 10) || 1;
+// ============================ ВКЛАДКА: ПЕЧАТЬ QR ПАКЕТОМ ============================
+function viewPrint(v) {
+  v.innerHTML =
+    '<div class="card no-print">' +
+      '<h2>Печать QR пакетом</h2>' +
+      '<p class="sub">Создаёт новые номера карт (со статусом «ожидает выдачи») и готовит QR для печати. Имя клиента впишете при выдаче карты.</p>' +
+      '<label>Сколько карт</label><input id="pr-count" type="number" value="9" min="1" max="60">' +
+      '<button class="btn-primary" id="pr-gen">Сгенерировать QR</button>' +
+      '<p class="sub" style="margin:14px 0 0;">Уже созданные карты можно распечатать в любой момент из вкладки «Карты» — у каждой есть кнопка с QR.</p>' +
+    '</div>' +
+    '<div class="card"><div class="qr-grid" id="pr-grid"></div>' +
+    '<button class="btn-secondary no-print hidden" id="pr-print" style="width:100%; margin-top:14px;">Распечатать страницу</button></div>';
+  document.getElementById('pr-gen').onclick = function () {
+    var count = parseInt(document.getElementById('pr-count').value, 10) || 1;
     apiPost('reserveNewCardIds', { count: count }).then(function (ids) {
-      var grid = document.getElementById('printGrid');
-      grid.innerHTML = '';
+      var grid = document.getElementById('pr-grid'); grid.innerHTML = '';
       (ids || []).forEach(function (id) {
-        var cell = document.createElement('div');
-        cell.className = 'qr-cell';
-        var img = document.createElement('img');
-        img.width = 130;
-        img.height = 130;
-        img.alt = id;
-        img.src = qrImageUrl(cardLink(id), 150);
-        var cap = document.createElement('div');
-        cap.className = 'cap';
-        cap.textContent = id;
-        cell.appendChild(img);
-        cell.appendChild(cap);
+        var cell = document.createElement('div'); cell.className = 'qr-cell';
+        cell.innerHTML = '<img src="' + qrImageUrl(cardLink(id), 150) + '" alt="' + esc(id) + '"><div class="cap">' + esc(id) + '</div>';
         grid.appendChild(cell);
       });
-      document.getElementById('printBtn').classList.remove('hidden');
+      document.getElementById('pr-print').classList.remove('hidden');
     });
-  }
+  };
+  document.getElementById('pr-print').onclick = function () { window.print(); };
+}
 
-  // ---------- ПАРОЛЬ ----------
+// ============================ ВКЛАДКА: СОТРУДНИКИ (только админ) ============================
+function viewStaff(v) {
+  v.innerHTML =
+    '<div class="card">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
+        '<h2 style="margin:0;">Сотрудники</h2>' +
+        '<button class="btn-secondary btn-sm" onclick="showUserModal(null)">+ Добавить</button>' +
+      '</div>' +
+      '<div class="clist" id="st-body"><p class="sub">Загрузка…</p></div>' +
+    '</div>';
+  refreshStaff();
+}
 
-  function doChangePass() {
-    var oldP = document.getElementById('oldPass').value;
-    var newP = document.getElementById('newPass').value;
-    var msg = document.getElementById('passMsg');
-    apiPost('changePassword', { username: currentUser.username, oldPassword: oldP, newPassword: newP }).then(function (res) {
-      msg.textContent = res.success ? 'Пароль изменён.' : res.error;
-      msg.style.color = res.success ? 'var(--green)' : 'var(--red)';
-      if (res.success) {
-        document.getElementById('oldPass').value = '';
-        document.getElementById('newPass').value = '';
-      }
+function refreshStaff() {
+  apiGet('listUsers', {}).then(function (users) {
+    var body = document.getElementById('st-body'); if (!body) return;
+    body.innerHTML = '';
+    (users || []).forEach(function (usr) {
+      var div = document.createElement('div');
+      div.className = 'citem';
+      var roleBadge = usr.role === 'admin'
+        ? '<span class="badge s-active">Админ</span>'
+        : '<span class="badge s-no_data">Кассир</span>';
+      var isMe = usr.login.toLowerCase() === state.user.username.toLowerCase();
+      div.innerHTML =
+        '<div class="who"><div class="nm">' + esc(usr.fullName) + (isMe ? ' <span style="color:var(--muted); font-weight:400;">(вы)</span>' : '') + '</div>' +
+          '<div class="meta">логин: ' + esc(usr.login) + '</div></div>' +
+        '<div class="right">' + roleBadge +
+          '<div style="display:flex; gap:6px;">' +
+            '<span class="icon-btn" data-edit>' + ICON.edit + '</span>' +
+            (isMe ? '' : '<span class="icon-btn" data-del style="color:var(--red);">' + ICON.trash + '</span>') +
+          '</div></div>';
+      div.querySelector('[data-edit]').onclick = function () { showUserModal(usr); };
+      var del = div.querySelector('[data-del]');
+      if (del) del.onclick = function () { confirmDeleteUser(usr); };
+      body.appendChild(div);
     });
-  }
+  });
+}
+
+function showUserModal(usr) {
+  var isNew = !usr;
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>' + (isNew ? 'Новый сотрудник' : 'Изменить сотрудника') + '</h2>' +
+    '<label>Имя сотрудника</label><input id="us-name" value="' + (isNew ? '' : esc(usr.fullName)) + '">' +
+    '<label>Логин</label><input id="us-login" value="' + (isNew ? '' : esc(usr.login)) + '" autocomplete="off">' +
+    '<label>Пароль' + (isNew ? '' : ' (оставьте пустым, чтобы не менять)') + '</label><input id="us-pass" type="password" autocomplete="new-password">' +
+    '<label>Роль</label><select id="us-role">' +
+      '<option value="cashier"' + (!isNew && usr.role === 'cashier' ? ' selected' : '') + '>Кассир</option>' +
+      '<option value="admin"' + (!isNew && usr.role === 'admin' ? ' selected' : '') + '>Администратор</option>' +
+    '</select>' +
+    '<button class="btn-primary" id="us-save">' + (isNew ? 'Создать' : 'Сохранить') + '</button>' +
+    '<div id="us-msg" class="msg"></div>'
+  );
+  document.getElementById('us-save').onclick = function () {
+    var payload = {
+      actorRole: state.user.role,
+      login: document.getElementById('us-login').value.trim(),
+      password: document.getElementById('us-pass').value,
+      role: document.getElementById('us-role').value,
+      fullName: document.getElementById('us-name').value.trim()
+    };
+    var req;
+    if (isNew) req = apiPost('addUser', payload);
+    else { payload.origLogin = usr.login; req = apiPost('updateUser', payload); }
+    req.then(function (res) {
+      if (res.success) { closeModal(); toast('Сохранено'); refreshStaff(); }
+      else { var m = document.getElementById('us-msg'); m.className = 'msg err'; m.textContent = res.error; }
+    });
+  };
+}
+
+function confirmDeleteUser(usr) {
+  openModal(
+    '<h2>Удалить сотрудника?</h2>' +
+    '<p class="sub">' + esc(usr.fullName) + ' (' + esc(usr.login) + ')</p>' +
+    '<div class="row-btns" style="margin-top:16px;">' +
+      '<button class="btn-ghost" onclick="closeModal()">Отмена</button>' +
+      '<button class="btn-danger" id="du-btn">Удалить</button>' +
+    '</div>'
+  );
+  document.getElementById('du-btn').onclick = function () {
+    apiPost('deleteUser', { actorRole: state.user.role, actorLogin: state.user.username, login: usr.login }).then(function (res) {
+      closeModal();
+      if (res.success) { toast('Сотрудник удалён'); refreshStaff(); }
+      else alert(res.error);
+    });
+  };
+}
+
+// ============================ ВКЛАДКА: ЕЩЁ (пароль, экспорт) ============================
+function viewSettings(v) {
+  var adminExtra = state.user.role === 'admin'
+    ? '<div class="card"><h2>Данные</h2><p class="sub">Скачать все карты в CSV (открывается в Excel).</p>' +
+      '<button class="btn-ghost" style="width:100%;" onclick="exportCsv()">Скачать CSV</button></div>'
+    : '';
+  v.innerHTML =
+    '<div class="card">' +
+      '<h2>Сменить пароль</h2>' +
+      '<label>Текущий пароль</label><input id="pw-old" type="password" autocomplete="current-password">' +
+      '<label>Новый пароль</label><input id="pw-new" type="password" autocomplete="new-password">' +
+      '<button class="btn-primary" id="pw-save">Сменить пароль</button>' +
+      '<div id="pw-msg" class="msg"></div>' +
+    '</div>' + adminExtra +
+    '<div class="card"><h2>Как выдавать карты клиентам</h2>' +
+    '<p class="sub" style="margin:0;">Клиент может сам навести камеру телефона на QR своей карты — откроется страница со статусом подписки и датой окончания, без каких-либо данных других клиентов.</p></div>';
+  document.getElementById('pw-save').onclick = function () {
+    var msg = document.getElementById('pw-msg');
+    apiPost('changePassword', {
+      username: state.user.username,
+      oldPassword: document.getElementById('pw-old').value,
+      newPassword: document.getElementById('pw-new').value
+    }).then(function (res) {
+      if (res.success) { msg.className = 'msg ok'; msg.textContent = 'Пароль изменён.'; document.getElementById('pw-old').value=''; document.getElementById('pw-new').value=''; }
+      else { msg.className = 'msg err'; msg.textContent = res.error; }
+    });
+  };
+}
+
+function exportCsv() {
+  window.open(API_BASE_URL + '?action=exportCsv', '_blank');
+}
+
+// ============================ УТИЛИТЫ ============================
+function openModal(html) {
+  closeModal();
+  var ov = document.createElement('div');
+  ov.className = 'overlay'; ov.id = 'overlay';
+  ov.innerHTML = '<div class="modal">' + html + '</div>';
+  ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(); });
+  document.body.appendChild(ov);
+}
+function closeModal() { var ov = document.getElementById('overlay'); if (ov) ov.remove(); }
+
+function toast(text) {
+  var t = document.createElement('div');
+  t.textContent = text;
+  t.style.cssText = 'position:fixed; left:50%; bottom:78px; transform:translateX(-50%); background:var(--brand-dark); color:#fff; padding:11px 18px; border-radius:100px; font-size:14px; font-weight:600; z-index:80; box-shadow:0 6px 20px rgba(0,0,0,.2);';
+  document.body.appendChild(t);
+  setTimeout(function () { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(function () { t.remove(); }, 300); }, 1800);
+}
+
+function debounce(fn, ms) {
+  var timer;
+  return function () { clearTimeout(timer); timer = setTimeout(fn, ms); };
+}
 </script>
 </body>
 </html>
