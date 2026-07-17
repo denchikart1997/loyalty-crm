@@ -111,7 +111,7 @@
   @media print { .topbar, .tabs, .no-print { display: none !important; } .wrap { padding: 0; max-width: 100%; } .card { box-shadow: none; border: none; } .qr-grid { grid-template-columns: repeat(3, 1fr); } }
 
   /* Наклейка с загруженным фоном: фон на всю карту, QR позиционируется поверх по заданным координатам */
-  .pcard.has-bg { padding: 0; border: none; display: block; background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; }
+  .pcard.has-bg { padding: 0; border: none; display: block; background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; overflow: hidden; }
   .pcard.has-bg .pcard-qr { position: absolute; width: auto; height: auto; }
   .pcard.has-bg .pcard-qr .qr-slot, .pcard.has-bg .pcard-qr img, .pcard.has-bg .pcard-qr svg { width: 100%; height: 100%; display: block; }
   .bg-preview-wrap { display: flex; justify-content: center; margin: 4px 0 6px; }
@@ -1803,13 +1803,34 @@ function cardStickerHtml(id) {
   return stickerHtmlPlain(id);
 }
 
-/** Наклейка поверх произвольного фона. x/y/size — проценты от размеров карты (85.6×54мм), поэтому одинаково работает и в превью, и при печати. */
+var CARD_W_MM = 85.6, CARD_H_MM = 54;
+
+/** Считает реальные мм-координаты QR по проценту и гарантирует, что QR никогда не вылезет за границы карты:
+ * размер берём от короткой стороны (высоты) — карта шире, чем выше, а QR всегда квадратный;
+ * позицию дополнительно подрезаем, если размер+смещение всё равно не влезает. */
+function clampQrGeometry(x, y, size) {
+  x = Number(x) || 0; y = Number(y) || 0; size = Number(size) || 40;
+  if (size < 10) size = 10;
+  if (size > 95) size = 95;
+  var szMm = size / 100 * CARD_H_MM;
+  var xMaxPct = Math.max(0, (CARD_W_MM - szMm) / CARD_W_MM * 100);
+  var yMaxPct = Math.max(0, (CARD_H_MM - szMm) / CARD_H_MM * 100);
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (x > xMaxPct) x = xMaxPct;
+  if (y > yMaxPct) y = yMaxPct;
+  return {
+    xMm: (x / 100 * CARD_W_MM).toFixed(2),
+    yMm: (y / 100 * CARD_H_MM).toFixed(2),
+    szMm: szMm.toFixed(2)
+  };
+}
+
+/** Наклейка поверх произвольного фона. x/y/size — проценты, геометрия всегда подрезается под физический размер карты (85.6×54мм), поэтому одинаково работает и в превью, и при печати. */
 function stickerHtmlWithBg(bgUrl, x, y, size, id) {
-  var xMm = (Number(x) / 100 * 85.6).toFixed(2);
-  var yMm = (Number(y) / 100 * 54).toFixed(2);
-  var szMm = (Number(size) / 100 * 85.6).toFixed(2);
+  var g = clampQrGeometry(x, y, size);
   return '<div class="pcard has-bg" style="background-image:url(&quot;' + esc(bgUrl) + '&quot;);">' +
-    '<div class="pcard-qr" style="left:' + xMm + 'mm; top:' + yMm + 'mm; width:' + szMm + 'mm; height:' + szMm + 'mm;">' +
+    '<div class="pcard-qr" style="left:' + g.xMm + 'mm; top:' + g.yMm + 'mm; width:' + g.szMm + 'mm; height:' + g.szMm + 'mm;">' +
       qrImgHtml(cardLink(id)) +
     '</div>' +
   '</div>';
@@ -2680,14 +2701,12 @@ function renderBgSettings() {
 
 /** Превью для настроек: в отличие от обычной наклейки, всегда показывает позицию QR — если фона ещё нет, рисует нейтральную заглушку вместо него, чтобы ползунки были видны в деле */
 function bgPreviewHtml(bgUrl, x, y, size) {
-  var xMm = (Number(x) / 100 * 85.6).toFixed(2);
-  var yMm = (Number(y) / 100 * 54).toFixed(2);
-  var szMm = (Number(size) / 100 * 85.6).toFixed(2);
+  var g = clampQrGeometry(x, y, size);
   var bgStyle = bgUrl
     ? 'background-image:url(&quot;' + esc(bgUrl) + '&quot;); background-size:cover; background-position:center;'
     : 'background:repeating-conic-gradient(#eef1ec 0% 25%, #ffffff 0% 50%) 0 0/14px 14px;';
   return '<div class="pcard has-bg" style="' + bgStyle + '">' +
-    '<div class="pcard-qr" style="left:' + xMm + 'mm; top:' + yMm + 'mm; width:' + szMm + 'mm; height:' + szMm + 'mm;">' +
+    '<div class="pcard-qr" style="left:' + g.xMm + 'mm; top:' + g.yMm + 'mm; width:' + g.szMm + 'mm; height:' + g.szMm + 'mm;">' +
       qrImgHtml(cardLink('LC-000000')) +
     '</div>' +
     (bgUrl ? '' : '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;"><span style="background:rgba(255,255,255,.85); padding:2px 7px; border-radius:6px; font-size:9px; color:var(--muted); font-weight:600;">фон ещё не загружен</span></div>') +
