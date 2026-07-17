@@ -2232,7 +2232,7 @@ function renderScanResult(card) {
         (card.notes ? '<dt>Заметки</dt><dd style="font-weight:400;">' + esc(card.notes) + '</dd>' : '') +
       '</dl>' +
       '<label>Продлить подписку на</label>' +
-      '<select id="rn-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+      '<select id="rn-months">' + monthOptionsHtml() + '</select>' +
       '<div class="row-btns" style="margin-top:12px;">' +
         '<button class="btn-primary" style="margin:0;" id="rn-btn" onclick="doRenew(\'' + esc(card.id) + '\')">Продлить</button>' +
         '<button class="btn-ghost" onclick="showQrModal(\'' + esc(card.id) + '\')">Показать QR</button>' +
@@ -2263,7 +2263,7 @@ function renderActivateForm(card) {
     '<label>Имя клиента</label><input id="ac-name">' +
     '<label>Телефон</label><input id="ac-phone" inputmode="tel" placeholder="+7…">' +
     '<label>Срок подписки</label>' +
-    '<select id="ac-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+    '<select id="ac-months">' + monthOptionsHtml() + '</select>' +
     '<button class="btn-primary" id="ac-save">Выдать карту клиенту</button>' +
     '<div id="ac-msg" class="msg"></div>' +
   '</div>';
@@ -2442,7 +2442,7 @@ function viewNew(v) {
       '<label>Имя клиента</label><input id="nw-name">' +
       '<label>Телефон</label><input id="nw-phone" inputmode="tel" placeholder="+7…">' +
       '<label>Срок подписки</label>' +
-      '<select id="nw-months"><option value="1">1 месяц</option><option value="3">3 месяца</option><option value="6">6 месяцев</option><option value="12">12 месяцев</option></select>' +
+      '<select id="nw-months">' + monthOptionsHtml() + '</select>' +
       '<label>Заметки</label><input id="nw-notes">' +
       '<button class="btn-primary" id="nw-create">Создать карту</button>' +
       '<div id="nw-msg" class="msg"></div>' +
@@ -2803,6 +2803,26 @@ function toast(text) {
 function debounce(fn, ms) {
   var timer;
   return function () { clearTimeout(timer); timer = setTimeout(fn, ms); };
+}
+
+/** Склонение слова «месяц» под число (1 месяц, 2 месяца, 5 месяцев, 11 месяцев, 21 месяц…) */
+function monthWord(n) {
+  var last2 = n % 100;
+  if (last2 >= 11 && last2 <= 14) return 'месяцев';
+  switch (n % 10) {
+    case 1: return 'месяц';
+    case 2: case 3: case 4: return 'месяца';
+    default: return 'месяцев';
+  }
+}
+
+/** <option> для выбора срока подписки — весь диапазон от 1 до 12 месяцев */
+function monthOptionsHtml() {
+  var out = '';
+  for (var m = 1; m <= 12; m += 1) {
+    out += '<option value="' + m + '">' + m + ' ' + monthWord(m) + '</option>';
+  }
+  return out;
 }
 
 /** Показывает спиннер на кнопке и блокирует повторное нажатие, пока идёт запрос к серверу */
