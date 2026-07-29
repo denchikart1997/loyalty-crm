@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Карты лояльности</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#2f8f4e">
 <style>
   :root {
     --bg: #f3f7f0; --surface: #ffffff; --ink: #16261b; --muted: #6b7c70; --line: #e2ebdd;
@@ -114,8 +117,9 @@
   .pcard.has-bg { padding: 0; border: none; display: block; background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; overflow: hidden; }
   .pcard.has-bg .pcard-qr { position: absolute; width: auto; height: auto; }
   .pcard.has-bg .pcard-qr .qr-slot, .pcard.has-bg .pcard-qr img, .pcard.has-bg .pcard-qr svg { width: 100%; height: 100%; display: block; }
-  .bg-preview-wrap { display: flex; justify-content: center; margin: 4px 0 6px; }
-  .bg-preview-wrap .pcard { transform: scale(1.35); transform-origin: center; margin: 20px 0; }
+  .bg-preview-wrap { display: flex; justify-content: center; margin: 4px 0 14px; padding: 16px 0; background: repeating-linear-gradient(45deg, #f7faf5, #f7faf5 10px, #eef3ea 10px, #eef3ea 20px); border-radius: 12px; overflow: hidden; }
+  .bg-preview-inner { width: 100%; max-width: 340px; }
+  .bg-preview-inner .pcard { width: 100%; max-width: none; height: auto; aspect-ratio: 85.6 / 54; }
 
   /* Индикатор загрузки внутри кнопок — чтобы было видно, что система работает, а не зависла */
   .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: sp-rotate .6s linear infinite; margin-right: 7px; vertical-align: -2px; }
@@ -131,6 +135,14 @@
   /* Плавное исчезновение элемента списка при удалении — без ожидания перезагрузки всего списка */
   .citem.removing { opacity: 0; transform: scale(.96); pointer-events: none; }
   .citem { transition: opacity .18s ease, transform .18s ease; }
+  .citem-checked { background: var(--brand-soft); border-color: var(--brand); }
+  .citem-check { width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--brand-dark); }
+
+  /* Бейдж статуса связи в шапке — виден только при обрыве/ожидании синхронизации, в остальное время скрыт */
+  .conn-badge { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 100px; white-space: nowrap; }
+  .conn-badge.hidden { display: none; }
+  .conn-badge.conn-off { background: var(--red-soft); color: var(--red); }
+  .conn-badge.conn-sync { background: var(--amber-soft); color: var(--amber); }
 </style>
 </head>
 <body>
@@ -1761,6 +1773,101 @@ function apiPost(action, payload) {
   return fetch(API_BASE_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) })
     .then(function (r) { return r.json(); });
 }
+
+// ============================ УСТОЙЧИВОСТЬ К ОБРЫВАМ СВЯЗИ ============================
+// Задача: не потерять действие кассира, если интернет пропал на секунду прямо в момент продления/выдачи карты.
+// Действие сохраняется локально и уходит на сервер само, как только связь вернётся.
+// Специально НЕ используется для createCard/reserveNewCardIds/generateCardId — там сервер сам подбирает
+// следующий свободный номер карты, и откладывать такое действие офлайн — риск задвоить номер.
+
+var OFFLINE_QUEUE_KEY = 'loyaltyOfflineQueueV1';
+var syncTimer = null;
+
+function loadQueue() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveQueue(q) {
+  try { localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q)); } catch (e) {}
+}
+function queueAction(action, payload) {
+  var q = loadQueue();
+  q.push({ action: action, payload: payload, ts: Date.now() });
+  saveQueue(q);
+  renderConnStatus();
+  scheduleSync(400);
+}
+
+/** Как apiPost, но для безопасных к отложенному выполнению действий: при обрыве связи не показывает ошибку,
+ * а откладывает действие и повторяет само. Вызывающий код получает { success:true, queued:true } и должен
+ * показать это как «отправится само», а не как обычное подтверждённое сохранение. */
+function apiPostResilient(action, payload) {
+  if (!navigator.onLine) {
+    queueAction(action, payload);
+    return Promise.resolve({ success: true, queued: true });
+  }
+  return apiPost(action, payload).catch(function () {
+    queueAction(action, payload);
+    return { success: true, queued: true };
+  });
+}
+
+function scheduleSync(delayMs) {
+  if (syncTimer) return;
+  syncTimer = setTimeout(function () { syncTimer = null; trySyncQueue(); }, delayMs || 4000);
+}
+
+function trySyncQueue() {
+  var q = loadQueue();
+  renderConnStatus();
+  if (!q.length) return;
+  if (!navigator.onLine) { scheduleSync(); return; }
+  var item = q[0];
+  apiPost(item.action, item.payload).then(function (res) {
+    q = loadQueue(); q.shift(); saveQueue(q);
+    if (!res || !res.success) toast('Не удалось отправить одно отложенное действие: ' + ((res && res.error) || 'ошибка сервера'));
+    renderConnStatus();
+    if (q.length) { scheduleSync(200); } else { toast('Все действия отправлены'); refreshCurrentTab(); }
+  }).catch(function () {
+    scheduleSync(); // сеть всё ещё недоступна — пробуем позже, элемент очереди не трогаем
+  });
+}
+
+window.addEventListener('online', function () { renderConnStatus(); trySyncQueue(); });
+window.addEventListener('offline', function () { renderConnStatus(); });
+
+function renderConnStatus() {
+  var el = document.getElementById('conn-status');
+  if (!el) return;
+  var n = loadQueue().length;
+  if (!navigator.onLine) {
+    el.className = 'conn-badge conn-off';
+    el.textContent = n ? ('Офлайн · ' + n + ' в очереди') : 'Офлайн';
+  } else if (n) {
+    el.className = 'conn-badge conn-sync';
+    el.textContent = 'Отправка… ' + n;
+  } else {
+    el.className = 'conn-badge hidden';
+    el.textContent = '';
+  }
+}
+
+/** Обновляет данные текущей открытой вкладки — вызывается после того как очередь синхронизировалась */
+function refreshCurrentTab() {
+  if (state.activeTab === 'list') refreshList();
+  else if (state.activeTab === 'staff') refreshStaff();
+}
+
+// ---- Локальный кэш последних загруженных списков — переживает перезагрузку страницы офлайн ----
+function persistCache(key, data) {
+  try { localStorage.setItem('loyaltyCache:' + key, JSON.stringify(data)); } catch (e) {}
+}
+function readCache(key) {
+  try {
+    var raw = localStorage.getItem('loyaltyCache:' + key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
 // ---- Локальная генерация QR (библиотека qrcode-generator подключена отдельным <script> выше) ----
 // Работает полностью офлайн: ни один QR-код больше не грузится с внешнего сервиса, поэтому качество связи в магазине ни на что не влияет.
 
@@ -1778,41 +1885,59 @@ function makeQrCode(text) {
 }
 
 /** SVG-разметка QR: viewBox подстраивает картинку под контейнер через CSS, печатается чётко на любом размере */
-function qrSvgMarkup(text) {
+function qrSvgMarkup(text, color) {
   var qr = makeQrCode(text);
   var raw = qr.createSvgTag(4); // margin по умолчанию = 4×cellSize — стандартная «тихая зона» вокруг QR
   var m = raw.match(/width="(\d+)px" height="(\d+)px"/);
   var size = m ? m[1] : String(qr.getModuleCount() * 4 + 32);
-  return raw.replace(/width="\d+px" height="\d+px"/, 'viewBox="0 0 ' + size + ' ' + size + '" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"');
+  raw = raw.replace(/width="\d+px" height="\d+px"/, 'viewBox="0 0 ' + size + ' ' + size + '" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"');
+  raw = raw.replace('fill="black"', 'fill="' + (color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#000000') + '"');
+  return raw;
 }
 
-/** HTML одного QR-кода (обёрнутый в .qr-slot) — рисуется в браузере локально, без сети */
-function qrImgHtml(text) {
+/** HTML одного QR-кода (обёрнутый в .qr-slot) — рисуется в браузере локально, без сети. color — необязательный hex-цвет модулей QR. */
+function qrImgHtml(text, color) {
   try {
-    return '<div class="qr-slot">' + qrSvgMarkup(text) + '</div>';
+    return '<div class="qr-slot">' + qrSvgMarkup(text, color) + '</div>';
   } catch (e) {
     return '<div class="qr-slot"><div style="border:1px dashed var(--line); border-radius:10px; padding:16px; text-align:center;">' +
       '<p class="msg err" style="margin:0;">Не удалось построить QR-код для этого номера карты.</p></div></div>';
   }
 }
 
+/** Приблизительная яркость цвета (0 — чёрный, 255 — белый) — используется, чтобы предупредить,
+ * если выбранный цвет QR слишком светлый и код может плохо сканироваться на белом фоне. */
+function colorLuma(hex) {
+  var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+function rgbToHex(r, g, b) {
+  function h(n) { return ('0' + Number(n).toString(16)).slice(-2); }
+  return '#' + h(r) + h(g) + h(b);
+}
+function hexToRgb(hex) {
+  return { r: parseInt(hex.slice(1, 3), 16) || 0, g: parseInt(hex.slice(3, 5), 16) || 0, b: parseInt(hex.slice(5, 7), 16) || 0 };
+}
+
 /** HTML одной наклейки-карты (85.6×54мм). Если в настройках загружен свой фон — QR рисуется поверх него по заданным координатам; иначе — стандартный вид с рамкой. */
 function cardStickerHtml(id) {
   var s = state.settings;
-  if (s && s.backgroundImageUrl) return stickerHtmlWithBg(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize, id);
-  return stickerHtmlPlain(id);
+  if (s && s.backgroundImageUrl) return stickerHtmlWithBg(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize, id, s.qrColor);
+  return stickerHtmlPlain(id, s && s.qrColor);
 }
 
 var CARD_W_MM = 85.6, CARD_H_MM = 54;
 
-/** Считает реальные мм-координаты QR по проценту и гарантирует, что QR никогда не вылезет за границы карты:
+/** Считает позицию/размер QR в процентах от карты и гарантирует, что QR никогда не вылезет за её границы:
  * размер берём от короткой стороны (высоты) — карта шире, чем выше, а QR всегда квадратный;
- * позицию дополнительно подрезаем, если размер+смещение всё равно не влезает. */
+ * позицию дополнительно подрезаем, если размер+смещение всё равно не влезает.
+ * Проценты (а не мм) намеренно — так один и тот же расчёт одинаково верно работает и на физической
+ * карточке 85.6×54мм при печати, и в адаптивном превью, которое само уменьшается под экран телефона. */
 function clampQrGeometry(x, y, size) {
   x = Number(x) || 0; y = Number(y) || 0; size = Number(size) || 40;
   if (size < 10) size = 10;
   if (size > 95) size = 95;
-  var szMm = size / 100 * CARD_H_MM;
+  var szMm = size / 100 * CARD_H_MM; // физический размер QR всегда считаем от высоты карты — от неё не выйдет за верх/низ
   var xMaxPct = Math.max(0, (CARD_W_MM - szMm) / CARD_W_MM * 100);
   var yMaxPct = Math.max(0, (CARD_H_MM - szMm) / CARD_H_MM * 100);
   if (x < 0) x = 0;
@@ -1820,27 +1945,28 @@ function clampQrGeometry(x, y, size) {
   if (x > xMaxPct) x = xMaxPct;
   if (y > yMaxPct) y = yMaxPct;
   return {
-    xMm: (x / 100 * CARD_W_MM).toFixed(2),
-    yMm: (y / 100 * CARD_H_MM).toFixed(2),
-    szMm: szMm.toFixed(2)
+    leftPct: x.toFixed(3),
+    topPct: y.toFixed(3),
+    widthPct: (szMm / CARD_W_MM * 100).toFixed(3),
+    heightPct: size.toFixed(3) // szMm/CARD_H_MM*100 всегда равно исходному size — по построению
   };
 }
 
 /** Наклейка поверх произвольного фона. x/y/size — проценты, геометрия всегда подрезается под физический размер карты (85.6×54мм), поэтому одинаково работает и в превью, и при печати. */
-function stickerHtmlWithBg(bgUrl, x, y, size, id) {
+function stickerHtmlWithBg(bgUrl, x, y, size, id, color) {
   var g = clampQrGeometry(x, y, size);
   return '<div class="pcard has-bg" style="background-image:url(&quot;' + esc(bgUrl) + '&quot;);">' +
-    '<div class="pcard-qr" style="left:' + g.xMm + 'mm; top:' + g.yMm + 'mm; width:' + g.szMm + 'mm; height:' + g.szMm + 'mm;">' +
-      qrImgHtml(cardLink(id)) +
+    '<div class="pcard-qr" style="left:' + g.leftPct + '%; top:' + g.topPct + '%; width:' + g.widthPct + '%; height:' + g.heightPct + '%;">' +
+      qrImgHtml(cardLink(id), color) +
     '</div>' +
   '</div>';
 }
 
 /** Стандартный вид наклейки без фона (как раньше) */
-function stickerHtmlPlain(id) {
+function stickerHtmlPlain(id, color) {
   return '<div class="pcard">' +
     '<div class="pcard-head">' + ICON.leaf + '<span>' + esc(SHOP_NAME) + '</span></div>' +
-    '<div class="pcard-qr">' + qrImgHtml(cardLink(id)) + '</div>' +
+    '<div class="pcard-qr">' + qrImgHtml(cardLink(id), color) + '</div>' +
     '<div class="pcard-id">' + esc(id) + '</div>' +
   '</div>';
 }
@@ -1861,7 +1987,7 @@ function baseUrl() { return window.location.origin + window.location.pathname; }
 function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
 
-var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null, settings: null, cardsCache: null, staffCache: null };
+var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null, settings: null, cardsCache: null, staffCache: null, activeTab: null, productsCache: null };
 var root = document.getElementById('root');
 
 // ============================ РОУТИНГ ПРИ ЗАГРУЗКЕ ============================
@@ -1965,7 +2091,8 @@ function renderApp(prefillCardId) {
   root.innerHTML =
     '<div class="topbar">' +
       '<div class="brandmark">' + ICON.leaf + 'Лояльность</div>' +
-      '<div style="display:flex; align-items:center; gap:14px;">' +
+      '<div style="display:flex; align-items:center; gap:10px;">' +
+        '<span class="conn-badge hidden" id="conn-status"></span>' +
         '<div class="whoami"><b>' + esc(u.fullName) + '</b>' + roleLabel + '</div>' +
         '<button class="link-btn" id="tb-logout">Выйти</button>' +
       '</div>' +
@@ -1996,15 +2123,21 @@ function renderApp(prefillCardId) {
   else go('scan');
 
   loadSettingsOnce();
+  renderConnStatus();
+  if (loadQueue().length) scheduleSync(200); // если остались несинхронизированные действия с прошлой сессии — досылаем
 }
 
 /** Настройки (фон наклейки, позиция QR) грузятся один раз за сессию и кэшируются — наклейки нигде не ждут лишний запрос */
 function loadSettingsOnce() {
   if (state.settings) return;
-  apiGet('getSettings', {}).then(function (s) { state.settings = s || {}; }).catch(function () { state.settings = {}; });
+  var cached = readCache('settings');
+  if (cached) state.settings = cached;
+  apiGet('getSettings', {}).then(function (s) { state.settings = s || {}; persistCache('settings', state.settings); })
+    .catch(function () { if (!state.settings) state.settings = {}; });
 }
 
 function go(name) {
+  state.activeTab = name;
   if (name !== 'scan') stopScanner();
   state.tabs.forEach(function (t) {
     var el = document.getElementById('tab-' + t.id);
@@ -2027,6 +2160,7 @@ function viewScan(v) {
       '<p class="sub">Наведите камеру на QR-код карты клиента.</p>' +
       '<div id="scan-stage" class="hidden"><video id="scan-video" playsinline muted></video></div>' +
       '<button class="btn-primary" id="scan-btn">Включить камеру</button>' +
+      '<button class="btn-ghost hidden" id="torch-btn" style="margin-top:8px;">Включить фонарик</button>' +
       '<div id="scan-status" class="msg" style="text-align:center;"></div>' +
       '<label>Или введите номер карты вручную</label>' +
       '<div style="display:flex; gap:8px;">' +
@@ -2118,6 +2252,7 @@ function startScanner() {
       btn.textContent = 'Остановить камеру';
       scanStatus('Наведите на QR-код');
       beginDetectLoop(video);
+      setupTorchButton();
     }).catch(function (err) {
       clearTimeout(state.startTimeout);
       failScan(describeCamError(err));
@@ -2198,6 +2333,38 @@ function cleanupCamera() {
   }
   var video = document.getElementById('scan-video');
   if (video) { try { video.pause(); } catch (e) {} video.srcObject = null; }
+  state.torchOn = false;
+  var torchBtn = document.getElementById('torch-btn');
+  if (torchBtn) { torchBtn.classList.add('hidden'); torchBtn.textContent = 'Включить фонарик'; }
+}
+
+/** Показывает кнопку фонарика, только если конкретная камера и браузер реально это поддерживают
+ * (torch управляется через MediaStreamTrack — работает в Chrome/Edge на Android, не работает в iOS Safari). */
+function setupTorchButton() {
+  var torchBtn = document.getElementById('torch-btn');
+  if (!torchBtn || !state.stream) return;
+  var track = state.stream.getVideoTracks()[0];
+  var caps = track && track.getCapabilities ? (function () { try { return track.getCapabilities(); } catch (e) { return null; } })() : null;
+  if (caps && caps.torch) {
+    torchBtn.classList.remove('hidden');
+    torchBtn.onclick = toggleTorch;
+  } else {
+    torchBtn.classList.add('hidden'); // на этом устройстве/браузере фонарик недоступен — просто не показываем кнопку
+  }
+}
+
+function toggleTorch() {
+  if (!state.stream) return;
+  var track = state.stream.getVideoTracks()[0];
+  if (!track) return;
+  var next = !state.torchOn;
+  track.applyConstraints({ advanced: [{ torch: next }] }).then(function () {
+    state.torchOn = next;
+    var torchBtn = document.getElementById('torch-btn');
+    if (torchBtn) torchBtn.textContent = next ? 'Выключить фонарик' : 'Включить фонарик';
+  }).catch(function () {
+    toast('Не удалось включить фонарик на этой камере');
+  });
 }
 
 function stopScanner() {
@@ -2266,9 +2433,11 @@ function doRenew(id) {
   var btn = document.getElementById('rn-btn');
   var months = document.getElementById('rn-months').value;
   setBtnLoading(btn, 'Продлеваем…');
-  apiPost('renewSubscription', { username: state.user.username, cardId: id, months: months }).then(function (res) {
+  apiPostResilient('renewSubscription', { username: state.user.username, cardId: id, months: months }).then(function (res) {
+    clearBtnLoading(btn);
+    if (res.queued) { toast('Нет связи — продление отправится само'); return; }
     if (res.success) { toast('Продлено до ' + res.card.endDate); renderScanResult(res.card); }
-    else { clearBtnLoading(btn); alert(res.error); }
+    else alert(res.error);
   }).catch(function () { clearBtnLoading(btn); });
 }
 
@@ -2293,17 +2462,31 @@ function renderActivateForm(card) {
 function wireActivateForm(id) {
   var btn = document.getElementById('ac-save');
   btn.onclick = function () {
+    var name = document.getElementById('ac-name').value.trim();
+    var phone = document.getElementById('ac-phone').value.trim();
+    var months = document.getElementById('ac-months').value;
     setBtnLoading(btn, 'Оформляем…');
-    apiPost('activateCard', {
-      username: state.user.username, cardId: id,
-      name: document.getElementById('ac-name').value.trim(),
-      phone: document.getElementById('ac-phone').value.trim(),
-      months: document.getElementById('ac-months').value
-    }).then(function (res) {
+    apiPostResilient('activateCard', { username: state.user.username, cardId: id, name: name, phone: phone, months: months }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.queued) { toast('Нет связи — карта выдана, данные отправятся сами'); renderPendingActivate(id, name); return; }
       if (res.success) { toast('Карта выдана клиенту'); renderScanResult(res.card); }
-      else { clearBtnLoading(btn); var m = document.getElementById('ac-msg'); m.className = 'msg err'; m.textContent = res.error; }
+      else { var m = document.getElementById('ac-msg'); m.className = 'msg err'; m.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); });
   };
+}
+
+/** Честный «отложенный» экран после выдачи карты офлайн — без выдуманной даты окончания, которую сервер ещё не подтвердил */
+function renderPendingActivate(id, name) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  box.innerHTML = '<div class="card">' +
+    '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+      '<h2>' + esc(name || 'Без имени') + '</h2>' +
+      '<span class="badge s-soon">Ожидает синхронизации</span>' +
+    '</div>' +
+    '<p class="cid" style="font-family:ui-monospace,monospace; color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(id) + '</p>' +
+    '<p class="sub" style="margin-top:10px;">Связи нет — карта выдана локально, данные отправятся на сервер сами при появлении сети. Можно сразу сканировать следующую карту.</p>' +
+  '</div>';
 }
 
 function prefillNewFrom(id) { go('new'); setTimeout(function () { var el = document.getElementById('nw-id'); if (el) el.value = id; }, 50); }
@@ -2316,18 +2499,54 @@ function goScanAndStart() {
 
 // ============================ ВКЛАДКА: ВСЕ КАРТЫ ============================
 function viewList(v) {
-  var cached = state.cardsCache;
+  var cached = state.cardsCache || readCache('cards');
+  if (cached) state.cardsCache = cached;
+  state.selectMode = false;
+  state.selectedIds = {};
   v.innerHTML =
     '<div class="stats" id="stats">' + (cached ? statsHtml(cached.stats) : skeletonStats()) + '</div>' +
     '<div class="card">' +
-      '<h2 style="margin-bottom:12px;">Все карты</h2>' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
+        '<h2 style="margin:0;">Все карты</h2>' +
+        '<button class="btn-ghost btn-sm" id="ls-select-toggle" style="margin:0;">Выбрать</button>' +
+      '</div>' +
       '<input id="ls-search" placeholder="Поиск по номеру, имени или телефону">' +
+      '<div id="ls-selectbar"></div>' +
       '<div class="clist" id="ls-body" style="margin-top:14px;">' + (cached ? cardsListHtml(cached.cards) : skeletonRows(4)) + '</div>' +
     '</div>';
   document.getElementById('ls-search').addEventListener('input', debounce(refreshList, 250));
+  document.getElementById('ls-select-toggle').onclick = toggleSelectMode;
   if (cached) wireListRows(cached.cards);
   // если кэш уже есть — показываем его мгновенно, а актуальные данные подтягиваем в фоне без мигания «Загрузка…»
   refreshList();
+}
+
+/** Включает/выключает режим выбора нескольких карт для пакетной печати */
+function toggleSelectMode() {
+  state.selectMode = !state.selectMode;
+  state.selectedIds = {};
+  var btn = document.getElementById('ls-select-toggle');
+  if (btn) btn.textContent = state.selectMode ? 'Отменить выбор' : 'Выбрать';
+  var cards = (state.cardsCache && state.cardsCache.cards) || [];
+  var body = document.getElementById('ls-body');
+  if (body) { body.innerHTML = cardsListHtml(cards); wireListRows(cards); }
+  renderSelectBar();
+}
+
+/** Панель «Выбрано: N» с кнопкой печати — появляется, только когда что-то отмечено */
+function renderSelectBar() {
+  var bar = document.getElementById('ls-selectbar');
+  if (!bar) return;
+  var n = Object.keys(state.selectedIds || {}).length;
+  if (!state.selectMode || !n) { bar.innerHTML = ''; return; }
+  bar.innerHTML =
+    '<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--brand-soft); border-radius:10px; padding:10px 12px; margin-top:10px;">' +
+      '<span style="font-size:13px; font-weight:700; color:var(--brand-dark);">Выбрано: ' + n + '</span>' +
+      '<button class="btn-primary btn-sm" style="margin:0;" id="ls-print-selected">Распечатать (' + n + ')</button>' +
+    '</div>';
+  document.getElementById('ls-print-selected').onclick = function () {
+    printCards(Object.keys(state.selectedIds));
+  };
 }
 
 function statsHtml(s) {
@@ -2339,23 +2558,28 @@ function statsHtml(s) {
 
 function cardsListHtml(cards) {
   if (!cards || !cards.length) return '<p class="sub" style="margin:0;">Ничего не найдено.</p>';
+  var sel = !!state.selectMode;
   return cards.map(function (c) {
     var meta = [];
     if (c.phone) meta.push(esc(c.phone));
     if (c.endDate) meta.push('до ' + esc(c.endDate));
-    return '<div class="citem" data-row="' + esc(c.id) + '">' +
-      '<div class="who">' +
-        '<div class="nm">' + esc(c.name || 'Без имени') + '</div>' +
-        '<div class="meta">' + meta.join(' · ') + '</div>' +
-        '<div class="cid">' + esc(c.id) + '</div>' +
+    var checked = (state.selectedIds && state.selectedIds[c.id]) ? ' checked' : '';
+    return '<div class="citem' + (checked ? ' citem-checked' : '') + '" data-row="' + esc(c.id) + '">' +
+      '<div style="display:flex; align-items:center; gap:10px; min-width:0;">' +
+        (sel ? '<input type="checkbox" class="citem-check" data-check="' + esc(c.id) + '"' + checked + '>' : '') +
+        '<div class="who">' +
+          '<div class="nm">' + esc(c.name || 'Без имени') + '</div>' +
+          '<div class="meta">' + meta.join(' · ') + '</div>' +
+          '<div class="cid">' + esc(c.id) + '</div>' +
+        '</div>' +
       '</div>' +
       '<div class="right">' +
         '<span class="badge s-' + c.status + '">' + STATUS_LABEL[c.status] + '</span>' +
-        '<div style="display:flex; gap:6px;">' +
+        (sel ? '' : '<div style="display:flex; gap:6px;">' +
           '<span class="icon-btn" title="QR-код" data-qr="' + esc(c.id) + '">' + ICON.qr + '</span>' +
           '<span class="icon-btn" title="Изменить" data-edit="' + esc(c.id) + '">' + ICON.edit + '</span>' +
           '<span class="icon-btn" title="Удалить" data-del="' + esc(c.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
-        '</div>' +
+        '</div>') +
       '</div>' +
     '</div>';
   }).join('');
@@ -2365,6 +2589,17 @@ function wireListRows(cards) {
   var body = document.getElementById('ls-body'); if (!body) return;
   cards.forEach(function (c) {
     var row = body.querySelector('[data-row="' + cssEsc(c.id) + '"]'); if (!row) return;
+    if (state.selectMode) {
+      row.onclick = function () {
+        if (state.selectedIds[c.id]) delete state.selectedIds[c.id]; else state.selectedIds[c.id] = true;
+        var chk = row.querySelector('[data-check]');
+        if (chk) chk.checked = !!state.selectedIds[c.id];
+        row.classList.toggle('citem-checked', !!state.selectedIds[c.id]);
+        renderSelectBar();
+      };
+      return;
+    }
+    row.onclick = null;
     row.querySelector('[data-qr]').onclick = function () { showQrModal(c.id); };
     row.querySelector('[data-edit]').onclick = function () { showEditModal(c); };
     row.querySelector('[data-del]').onclick = function () { confirmDeleteCard(c, row); };
@@ -2378,12 +2613,12 @@ function refreshList() {
   var q = qEl ? qEl.value : '';
   apiGet('getCardsScreen', { q: q }).then(function (res) {
     if (!res || res.error) return;
-    if (!q) state.cardsCache = res; // кэшируем только незафильтрованный список — именно его показываем при повторном открытии вкладки
+    if (!q) { state.cardsCache = res; persistCache('cards', res); } // кэшируем только незафильтрованный список — именно его показываем при повторном открытии вкладки
     var statsEl = document.getElementById('stats'); if (statsEl) statsEl.innerHTML = statsHtml(res.stats);
     var body = document.getElementById('ls-body'); if (!body) return;
     body.innerHTML = cardsListHtml(res.cards);
     wireListRows(res.cards);
-  });
+  }).catch(function () { /* нет связи — оставляем на экране то, что уже показано (кэш или предыдущий список) */ });
 }
 
 function confirmDeleteCard(c, rowEl) {
@@ -2402,7 +2637,8 @@ function confirmDeleteCard(c, rowEl) {
     if (rowEl) { rowEl.classList.add('removing'); setTimeout(function () { if (rowEl.parentNode) rowEl.remove(); }, 180); }
     if (state.cardsCache) state.cardsCache.cards = state.cardsCache.cards.filter(function (x) { return x.id !== c.id; });
     toast('Карта удаляется…');
-    apiPost('deleteCard', { cardId: c.id }).then(function (res) {
+    apiPostResilient('deleteCard', { cardId: c.id }).then(function (res) {
+      if (res.queued) { toast('Нет связи — удаление отправится само'); return; }
       if (res.success) { toast('Карта удалена'); }
       else { alert(res.error); refreshList(); } // если сервер отказал — переcобираем список, чтобы вернуть строку обратно
     }).catch(function () { refreshList(); });
@@ -2421,12 +2657,13 @@ function showEditModal(c) {
     '<div id="ed-msg" class="msg"></div>'
   );
   document.getElementById('ed-save').onclick = function () {
-    apiPost('updateCard', {
+    apiPostResilient('updateCard', {
       username: state.user.username, cardId: c.id,
       name: document.getElementById('ed-name').value,
       phone: document.getElementById('ed-phone').value,
       notes: document.getElementById('ed-notes').value
     }).then(function (res) {
+      if (res.queued) { closeModal(); toast('Нет связи — изменения отправятся сами'); refreshList(); return; }
       if (res.success) { closeModal(); toast('Сохранено'); refreshList(); }
       else { var m = document.getElementById('ed-msg'); m.className = 'msg err'; m.textContent = res.error; }
     });
@@ -2536,7 +2773,8 @@ function viewPrint(v) {
 
 // ============================ ВКЛАДКА: СОТРУДНИКИ (только админ) ============================
 function viewStaff(v) {
-  var cached = state.staffCache;
+  var cached = state.staffCache || readCache('staff');
+  if (cached) state.staffCache = cached;
   v.innerHTML =
     '<div class="card">' +
       '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
@@ -2578,10 +2816,11 @@ function wireStaffRows(users) {
 function refreshStaff() {
   apiGet('listUsers', {}).then(function (users) {
     state.staffCache = users || [];
+    persistCache('staff', state.staffCache);
     var body = document.getElementById('st-body'); if (!body) return;
     body.innerHTML = staffListHtml(users);
     wireStaffRows(users);
-  });
+  }).catch(function () { /* нет связи — оставляем то, что уже на экране */ });
 }
 
 function showUserModal(usr) {
@@ -2656,6 +2895,7 @@ function viewSettings(v) {
       '<div id="pw-msg" class="msg"></div>' +
     '</div>' + adminExtra +
     (isAdmin ? '<div class="card" id="bg-card"><h2>Фон для наклейки карты</h2><p class="sub">Загрузка…</p></div>' : '') +
+    (isAdmin ? '<div class="card" id="products-card"><h2>Товары и цены</h2><p class="sub">Загрузка…</p></div>' : '') +
     '<div class="card"><h2>Как выдавать карты клиентам</h2>' +
     '<p class="sub" style="margin:0;">Клиент может сам навести камеру телефона на QR своей карты — откроется страница со статусом подписки и датой окончания, без каких-либо данных других клиентов.</p></div>';
   document.getElementById('pw-save').onclick = function () {
@@ -2672,42 +2912,58 @@ function viewSettings(v) {
       else { msg.className = 'msg err'; msg.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); });
   };
-  if (isAdmin) renderBgSettings();
+  if (isAdmin) { renderBgSettings(); renderProductsBlock(); }
 }
 
 /** Блок настроек фона наклейки — грузим свежие настройки при каждом открытии вкладки, чтобы админ всегда видел актуальное состояние */
 function renderBgSettings() {
   apiGet('getSettings', {}).then(function (s) {
+    if (!s || s.error) {
+      var card0 = document.getElementById('bg-card');
+      if (card0) card0.innerHTML = '<h2>Фон и цвет наклейки</h2><p class="msg err">Не удалось загрузить настройки' + (s && s.error ? ': ' + esc(s.error) : '') + '. Откройте вкладку заново.</p>';
+      return;
+    }
     state.settings = s;
+    persistCache('settings', s);
     var card = document.getElementById('bg-card');
     if (!card) return; // ушли с вкладки, пока грузилось
+    var rgb = hexToRgb(s.qrColor || '#000000');
     card.innerHTML =
-      '<h2>Фон для наклейки карты</h2>' +
-      '<p class="sub">Загрузите картинку болванки — она станет фоном наклейки вместо стандартного шаблона, а QR-код автоматически ляжет поверх в заданном месте. Применяется сразу везде: во вкладках «Карты», «Новая» и «Печать». Ползунки ниже двигают QR даже до загрузки фона — так видно, куда он встанет.</p>' +
+      '<h2>Фон и цвет наклейки</h2>' +
+      '<p class="sub">Загрузите картинку болванки — она станет фоном наклейки вместо стандартного шаблона, а QR-код автоматически ляжет поверх в заданном месте. Применяется сразу везде: во вкладках «Карты», «Новая» и «Печать».</p>' +
       '<input type="file" accept="image/*" id="bg-file">' +
-      '<div class="bg-preview-wrap" id="bg-preview">' + bgPreviewHtml(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize) + '</div>' +
-      '<label>Смещение QR по горизонтали (%)</label><input type="range" id="bg-x" min="0" max="75" value="' + s.qrX + '">' +
-      '<label>Смещение QR по вертикали (%)</label><input type="range" id="bg-y" min="0" max="75" value="' + s.qrY + '">' +
-      '<label>Размер QR (%)</label><input type="range" id="bg-size" min="15" max="70" value="' + s.qrSize + '">' +
-      '<button class="btn-primary" id="bg-save">Сохранить фон</button>' +
+      '<div class="bg-preview-wrap"><div class="bg-preview-inner" id="bg-preview">' + bgPreviewHtml(s.backgroundImageUrl, s.qrX, s.qrY, s.qrSize, s.qrColor) + '</div></div>' +
+      '<label>Смещение QR по горизонтали (%)</label><input type="range" id="bg-x" min="0" max="90" value="' + s.qrX + '">' +
+      '<label>Смещение QR по вертикали (%)</label><input type="range" id="bg-y" min="0" max="90" value="' + s.qrY + '">' +
+      '<label>Размер QR (%)</label><input type="range" id="bg-size" min="15" max="90" value="' + s.qrSize + '">' +
+      '<label style="margin-top:10px;">Цвет QR-кода</label>' +
+      '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">' +
+        '<span id="bg-color-swatch" style="width:30px; height:30px; border-radius:8px; border:1px solid var(--line); flex-shrink:0; background:' + esc(s.qrColor || '#000000') + ';"></span>' +
+        '<span id="bg-color-hex" style="font-family:ui-monospace,monospace; font-size:12px; color:var(--muted);">' + esc(s.qrColor || '#000000') + '</span>' +
+      '</div>' +
+      '<label style="font-size:11px; color:var(--muted); margin-bottom:2px;">Красный (R)</label><input type="range" id="bg-color-r" min="0" max="255" value="' + rgb.r + '">' +
+      '<label style="font-size:11px; color:var(--muted); margin-bottom:2px;">Зелёный (G)</label><input type="range" id="bg-color-g" min="0" max="255" value="' + rgb.g + '">' +
+      '<label style="font-size:11px; color:var(--muted); margin-bottom:2px;">Синий (B)</label><input type="range" id="bg-color-b" min="0" max="255" value="' + rgb.b + '">' +
+      '<p class="msg" id="bg-color-warn" style="display:none;"></p>' +
+      '<button class="btn-primary" id="bg-save">Сохранить</button>' +
       (s.backgroundImageUrl ? '<button class="btn-ghost" id="bg-remove" style="width:100%; margin-top:8px;">Убрать фон (вернуть обычный шаблон)</button>' : '') +
       '<div id="bg-msg" class="msg"></div>';
     wireBgSettings(s);
   }).catch(function () {
     var card = document.getElementById('bg-card');
-    if (card) card.innerHTML = '<h2>Фон для наклейки карты</h2><p class="msg err">Не удалось загрузить настройки. Откройте вкладку заново.</p>';
+    if (card) card.innerHTML = '<h2>Фон и цвет наклейки</h2><p class="msg err">Нет связи с сервером. Откройте вкладку заново, когда появится интернет.</p>';
   });
 }
 
 /** Превью для настроек: в отличие от обычной наклейки, всегда показывает позицию QR — если фона ещё нет, рисует нейтральную заглушку вместо него, чтобы ползунки были видны в деле */
-function bgPreviewHtml(bgUrl, x, y, size) {
+function bgPreviewHtml(bgUrl, x, y, size, color) {
   var g = clampQrGeometry(x, y, size);
   var bgStyle = bgUrl
     ? 'background-image:url(&quot;' + esc(bgUrl) + '&quot;); background-size:cover; background-position:center;'
     : 'background:repeating-conic-gradient(#eef1ec 0% 25%, #ffffff 0% 50%) 0 0/14px 14px;';
   return '<div class="pcard has-bg" style="' + bgStyle + '">' +
-    '<div class="pcard-qr" style="left:' + g.xMm + 'mm; top:' + g.yMm + 'mm; width:' + g.szMm + 'mm; height:' + g.szMm + 'mm;">' +
-      qrImgHtml(cardLink('LC-000000')) +
+    '<div class="pcard-qr" style="left:' + g.leftPct + '%; top:' + g.topPct + '%; width:' + g.widthPct + '%; height:' + g.heightPct + '%;">' +
+      qrImgHtml(cardLink('LC-000000'), color) +
     '</div>' +
     (bgUrl ? '' : '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;"><span style="background:rgba(255,255,255,.85); padding:2px 7px; border-radius:6px; font-size:9px; color:var(--muted); font-weight:600;">фон ещё не загружен</span></div>') +
   '</div>';
@@ -2718,11 +2974,27 @@ function wireBgSettings(s) {
   var currentBgUrl = s.backgroundImageUrl || '';
 
   function currentSrc() { return pendingDataUrl || currentBgUrl; }
+  function currentColor() {
+    var r = document.getElementById('bg-color-r').value, g = document.getElementById('bg-color-g').value, b = document.getElementById('bg-color-b').value;
+    return rgbToHex(r, g, b);
+  }
   function updatePreview() {
     var x = document.getElementById('bg-x').value, y = document.getElementById('bg-y').value, sz = document.getElementById('bg-size').value;
+    var color = currentColor();
     var prev = document.getElementById('bg-preview');
-    prev.innerHTML = bgPreviewHtml(currentSrc(), x, y, sz);
+    if (prev) prev.innerHTML = bgPreviewHtml(currentSrc(), x, y, sz, color);
+    var swatch = document.getElementById('bg-color-swatch'); if (swatch) swatch.style.background = color;
+    var hexEl = document.getElementById('bg-color-hex'); if (hexEl) hexEl.textContent = color;
+    var warn = document.getElementById('bg-color-warn');
+    if (warn) {
+      if (colorLuma(color) > 170) { warn.style.display = ''; warn.className = 'msg err'; warn.textContent = 'Цвет слишком светлый — QR может плохо сканироваться на белом фоне. Лучше выбрать более тёмный и насыщенный оттенок.'; }
+      else { warn.style.display = 'none'; }
+    }
   }
+
+  // Принудительно синхронизируем превью с текущими значениями ползунков сразу после отрисовки —
+  // страховка на случай, если браузер не сразу отрисует позицию по атрибуту value.
+  updatePreview();
 
   document.getElementById('bg-file').addEventListener('change', function (e) {
     var file = e.target.files && e.target.files[0];
@@ -2736,26 +3008,27 @@ function wireBgSettings(s) {
     }).catch(function () { msg.className = 'msg err'; msg.textContent = 'Не удалось прочитать это изображение.'; });
   });
 
-  ['bg-x', 'bg-y', 'bg-size'].forEach(function (id) {
+  ['bg-x', 'bg-y', 'bg-size', 'bg-color-r', 'bg-color-g', 'bg-color-b'].forEach(function (id) {
     document.getElementById(id).addEventListener('input', updatePreview);
   });
 
   document.getElementById('bg-save').onclick = function () {
     var btn = this;
     var msg = document.getElementById('bg-msg');
-    if (!pendingDataUrl && !currentBgUrl) { msg.className = 'msg err'; msg.textContent = 'Сначала выберите картинку.'; return; }
     setBtnLoading(btn, 'Сохраняем…');
     apiPost('saveSettings', {
       actorRole: state.user.role,
       backgroundImage: pendingDataUrl || undefined,
       qrX: document.getElementById('bg-x').value,
       qrY: document.getElementById('bg-y').value,
-      qrSize: document.getElementById('bg-size').value
+      qrSize: document.getElementById('bg-size').value,
+      qrColor: currentColor()
     }).then(function (res) {
       clearBtnLoading(btn);
       if (res.success) {
         state.settings = res.settings;
-        toast('Фон сохранён');
+        persistCache('settings', res.settings);
+        toast('Сохранено');
         renderBgSettings();
       } else { msg.className = 'msg err'; msg.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
@@ -2767,7 +3040,7 @@ function wireBgSettings(s) {
     setBtnLoading(btn, 'Убираем…');
     apiPost('saveSettings', { actorRole: state.user.role, clearBackground: true }).then(function (res) {
       clearBtnLoading(btn);
-      if (res.success) { state.settings = res.settings; toast('Фон убран'); renderBgSettings(); }
+      if (res.success) { state.settings = res.settings; persistCache('settings', res.settings); toast('Фон убран'); renderBgSettings(); }
       else alert(res.error);
     }).catch(function () { clearBtnLoading(btn); });
   };
@@ -2794,6 +3067,192 @@ function resizeImageFile(file, maxDim, quality) {
     reader.onerror = function () { reject(new Error('read error')); };
     reader.readAsDataURL(file);
   });
+}
+
+
+// ============================ ТОВАРЫ И ЦЕНЫ (только админ) ============================
+// Проценты наценки для колонок — личная настройка устройства (не требует похода на сервер), по умолчанию 25/30/35%
+var MARKUP_KEY = 'loyaltyMarkupPercentsV1';
+function loadMarkupPercents() {
+  try {
+    var v = JSON.parse(localStorage.getItem(MARKUP_KEY) || 'null');
+    if (Array.isArray(v) && v.length === 3) return v;
+  } catch (e) {}
+  return [25, 30, 35];
+}
+function saveMarkupPercents(arr) {
+  try { localStorage.setItem(MARKUP_KEY, JSON.stringify(arr)); } catch (e) {}
+}
+/** Цена с наценкой, округлённая до целого рубля — так удобнее ставить реальные ценники */
+function priceWithMarkup(purchasePrice, pct) {
+  return Math.round((Number(purchasePrice) || 0) * (1 + (Number(pct) || 0) / 100));
+}
+
+function renderProductsBlock() {
+  var cached = state.productsCache || readCache('products');
+  if (cached) state.productsCache = cached;
+  var card = document.getElementById('products-card');
+  if (!card) return;
+  var pct = loadMarkupPercents();
+  card.innerHTML =
+    '<h2>Товары и цены</h2>' +
+    '<p class="sub">Ассортимент и закупочные цены — цена с наценкой считается сама по трём процентам ниже.</p>' +
+    '<label style="margin-top:0;">Проценты наценки для колонок</label>' +
+    '<div style="display:flex; gap:8px;">' +
+      '<input type="number" id="pm-pct-0" value="' + pct[0] + '" min="0" max="900" style="text-align:center;">' +
+      '<input type="number" id="pm-pct-1" value="' + pct[1] + '" min="0" max="900" style="text-align:center;">' +
+      '<input type="number" id="pm-pct-2" value="' + pct[2] + '" min="0" max="900" style="text-align:center;">' +
+    '</div>' +
+    '<button class="btn-secondary" id="pm-add" style="width:100%; margin-top:14px;">+ Добавить товар</button>' +
+    '<input id="pm-search" placeholder="Поиск по названию или категории" style="margin-top:10px;">' +
+    '<div class="clist" id="pm-body" style="margin-top:14px;">' + (cached ? productsListHtml(cached) : skeletonRows(3)) + '</div>' +
+    '<button class="btn-ghost" id="pm-export" style="width:100%; margin-top:10px;">Скачать список в CSV</button>';
+
+  ['pm-pct-0', 'pm-pct-1', 'pm-pct-2'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', debounce(function () {
+      var vals = ['pm-pct-0', 'pm-pct-1', 'pm-pct-2'].map(function (i) { return Number(document.getElementById(i).value) || 0; });
+      saveMarkupPercents(vals);
+      var body = document.getElementById('pm-body');
+      var list = state.productsCache || [];
+      if (body) { body.innerHTML = productsListHtml(list); wireProductRows(list); }
+    }, 300));
+  });
+
+  document.getElementById('pm-add').onclick = function () { showProductModal(null); };
+  document.getElementById('pm-search').addEventListener('input', debounce(refreshProducts, 250));
+  document.getElementById('pm-export').onclick = exportProductsCsv;
+
+  if (cached) wireProductRows(cached);
+  refreshProducts();
+}
+
+function productsListHtml(products) {
+  if (!products || !products.length) return '<p class="sub" style="margin:0;">Пока нет ни одного товара — добавьте первый выше.</p>';
+  var pct = loadMarkupPercents();
+  return products.map(function (p) {
+    var priceLine = pct.map(function (x) { return x + '%: ' + priceWithMarkup(p.price, x) + '₽'; }).join(' · ');
+    return '<div class="citem" data-prow="' + esc(p.id) + '">' +
+      '<div class="who">' +
+        '<div class="nm">' + esc(p.name) + (p.category ? ' <span style="color:var(--muted); font-weight:400; font-size:12px;">· ' + esc(p.category) + '</span>' : '') + '</div>' +
+        '<div class="meta">Закупка: ' + (Number(p.price) || 0).toFixed(2) + '₽' + (p.unit ? ' / ' + esc(p.unit) : '') + '</div>' +
+        '<div class="cid" style="color:var(--brand-dark); font-weight:700; font-family:inherit; letter-spacing:0;">' + priceLine + '</div>' +
+      '</div>' +
+      '<div class="right">' +
+        '<div style="display:flex; gap:6px;">' +
+          '<span class="icon-btn" title="Изменить" data-pedit="' + esc(p.id) + '">' + ICON.edit + '</span>' +
+          '<span class="icon-btn" title="Удалить" data-pdel="' + esc(p.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function wireProductRows(products) {
+  var body = document.getElementById('pm-body'); if (!body) return;
+  products.forEach(function (p) {
+    var row = body.querySelector('[data-prow="' + cssEsc(p.id) + '"]'); if (!row) return;
+    var editBtn = row.querySelector('[data-pedit]'); if (editBtn) editBtn.onclick = function () { showProductModal(p); };
+    var delBtn = row.querySelector('[data-pdel]'); if (delBtn) delBtn.onclick = function () { confirmDeleteProduct(p, row); };
+  });
+}
+
+function refreshProducts() {
+  var qEl = document.getElementById('pm-search');
+  var q = qEl ? qEl.value : '';
+  apiGet('listProducts', { q: q }).then(function (products) {
+    if (!products || products.error) return;
+    if (!q) { state.productsCache = products; persistCache('products', products); }
+    var body = document.getElementById('pm-body'); if (!body) return;
+    body.innerHTML = productsListHtml(products);
+    wireProductRows(products);
+  }).catch(function () { /* нет связи — оставляем то, что уже на экране */ });
+}
+
+function showProductModal(p) {
+  var isNew = !p;
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>' + (isNew ? 'Новый товар' : 'Изменить товар') + '</h2>' +
+    '<label>Название</label><input id="pm-name" value="' + (p ? esc(p.name) : '') + '" placeholder="Картофель белорусский">' +
+    '<label>Категория (необязательно)</label><input id="pm-category" value="' + (p ? esc(p.category) : '') + '" placeholder="Овощи, фрукты, заморозка…">' +
+    '<label>Единица</label>' +
+    '<select id="pm-unit">' +
+      ['кг', 'шт', 'л', 'уп'].map(function (u) { return '<option value="' + u + '"' + (p && p.unit === u ? ' selected' : '') + '>' + u + '</option>'; }).join('') +
+    '</select>' +
+    '<label>Закупочная цена, ₽</label><input id="pm-price" type="number" step="0.01" min="0" value="' + (p ? p.price : '') + '">' +
+    '<label>Заметки</label><input id="pm-notes" value="' + (p ? esc(p.notes) : '') + '">' +
+    '<button class="btn-primary" id="pm-save">' + (isNew ? 'Добавить' : 'Сохранить') + '</button>' +
+    '<div id="pm-modal-msg" class="msg"></div>'
+  );
+  document.getElementById('pm-save').onclick = function () {
+    var btn = this;
+    var name = document.getElementById('pm-name').value.trim();
+    var msg = document.getElementById('pm-modal-msg');
+    if (!name) { msg.className = 'msg err'; msg.textContent = 'Укажите название товара'; return; }
+    var payload = {
+      actorRole: state.user.role, username: state.user.username,
+      name: name,
+      category: document.getElementById('pm-category').value.trim(),
+      unit: document.getElementById('pm-unit').value,
+      price: document.getElementById('pm-price').value,
+      notes: document.getElementById('pm-notes').value
+    };
+    if (!isNew) payload.id = p.id;
+    setBtnLoading(btn, isNew ? 'Добавляем…' : 'Сохраняем…');
+    apiPost(isNew ? 'addProduct' : 'updateProduct', payload).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { closeModal(); toast('Сохранено'); refreshProducts(); }
+      else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  };
+}
+
+function confirmDeleteProduct(p, rowEl) {
+  openModal(
+    '<h2>Удалить товар?</h2>' +
+    '<p class="sub">' + esc(p.name) + '<br>Действие необратимо.</p>' +
+    '<div class="row-btns" style="margin-top:16px;">' +
+      '<button class="btn-ghost" onclick="closeModal()">Отмена</button>' +
+      '<button class="btn-danger" id="pm-del-confirm">Удалить</button>' +
+    '</div>'
+  );
+  var btn = document.getElementById('pm-del-confirm');
+  btn.onclick = function () {
+    closeModal();
+    if (rowEl) { rowEl.classList.add('removing'); setTimeout(function () { if (rowEl.parentNode) rowEl.remove(); }, 180); }
+    if (state.productsCache) state.productsCache = state.productsCache.filter(function (x) { return x.id !== p.id; });
+    toast('Товар удаляется…');
+    apiPost('deleteProduct', { actorRole: state.user.role, id: p.id }).then(function (res) {
+      if (res.success) toast('Товар удалён');
+      else { alert(res.error); refreshProducts(); }
+    }).catch(function () { refreshProducts(); });
+  };
+}
+
+/** CSV собирается прямо на месте из уже загруженного списка — отдельный запрос к серверу не нужен */
+function exportProductsCsv() {
+  var products = state.productsCache || [];
+  if (!products.length) { toast('Нет товаров для экспорта'); return; }
+  var pct = loadMarkupPercents();
+  var header = ['Название', 'Категория', 'Единица', 'Закупочная цена'].concat(pct.map(function (x) { return 'Цена ' + x + '%'; }));
+  var lines = [header.join(',')];
+  products.forEach(function (p) {
+    var row = [p.name, p.category || '', p.unit || '', (Number(p.price) || 0).toFixed(2)]
+      .concat(pct.map(function (x) { return String(priceWithMarkup(p.price, x)); }));
+    var cells = row.map(function (c) {
+      var s = String(c);
+      if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1) s = '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    });
+    lines.push(cells.join(','));
+  });
+  var csv = '\ufeff' + lines.join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'tovary.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 }
 
 function exportCsv() {
@@ -2868,6 +3327,14 @@ function skeletonRows(n) {
   var out = '';
   for (var i = 0; i < (n || 3); i++) out += '<div class="skel skel-row"></div>';
   return out;
+}
+
+// Регистрируем Service Worker — чтобы установленное приложение открывалось мгновенно
+// и не оставалось белым экраном, если связи нет прямо в момент запуска.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* не критично, приложение и так работает */ });
+  });
 }
 </script>
 </body>
