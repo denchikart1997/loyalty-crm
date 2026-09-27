@@ -2654,7 +2654,14 @@ function showEditModal(c) {
     '<label>Телефон</label><input id="ed-phone" value="' + esc(c.phone) + '">' +
     '<label>Заметки</label><input id="ed-notes" value="' + esc(c.notes) + '">' +
     '<button class="btn-primary" id="ed-save">Сохранить</button>' +
-    '<div id="ed-msg" class="msg"></div>'
+    '<div id="ed-msg" class="msg"></div>' +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:18px 0 14px;">' +
+    '<label style="margin-top:0;">Продлить подписку на</label>' +
+    '<div style="display:flex; gap:8px;">' +
+      '<select id="ed-months" style="flex:1;">' + monthOptionsHtml() + '</select>' +
+      '<button class="btn-secondary" id="ed-renew" style="white-space:nowrap; margin:0;">Продлить</button>' +
+    '</div>' +
+    '<p class="sub" id="ed-enddate" style="margin-top:8px; margin-bottom:0;">Сейчас: ' + (c.endDate ? 'действует до ' + esc(c.endDate) : 'карта ещё не выдана клиенту') + '</p>'
   );
   document.getElementById('ed-save').onclick = function () {
     apiPostResilient('updateCard', {
@@ -2667,6 +2674,22 @@ function showEditModal(c) {
       if (res.success) { closeModal(); toast('Сохранено'); refreshList(); }
       else { var m = document.getElementById('ed-msg'); m.className = 'msg err'; m.textContent = res.error; }
     });
+  };
+  document.getElementById('ed-renew').onclick = function () {
+    var btn = this;
+    var months = document.getElementById('ed-months').value;
+    setBtnLoading(btn, 'Продлеваем…');
+    apiPostResilient('renewSubscription', { username: state.user.username, cardId: c.id, months: months }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.queued) { toast('Нет связи — продление отправится само'); return; }
+      if (res.success) {
+        toast('Продлено до ' + res.card.endDate);
+        c.endDate = res.card.endDate;
+        var dateEl = document.getElementById('ed-enddate');
+        if (dateEl) dateEl.textContent = 'Сейчас: действует до ' + res.card.endDate;
+        refreshList();
+      } else { alert(res.error); }
+    }).catch(function () { clearBtnLoading(btn); });
   };
 }
 
