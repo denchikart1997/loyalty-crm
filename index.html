@@ -2,8 +2,12 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Карты лояльности</title>
+<!-- Заранее открываем соединение с Google Apps Script: первый запрос не тратит время на установку защищённого канала -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
+<link rel="dns-prefetch" href="https://script.google.com">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#2f8f4e">
@@ -167,6 +171,59 @@
   .hist-title .hist-card { color: var(--muted); font-weight: 500; font-size: 12.5px; }
   .hist-det { font-size: 13px; word-break: break-word; margin-top: 1px; }
   .hist-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ---- Отклик и адаптивность ---- */
+  :root { --topbar-h: 56px; --side-w: 224px; }
+  html { -webkit-text-size-adjust: 100%; }
+  button, select, input, .icon-btn, .tab, .chip { touch-action: manipulation; } /* убирает задержку нажатия на телефоне */
+  input, select { font-size: 16px; }                    /* iOS не «приближает» страницу при фокусе в поле */
+  .topbar { min-height: var(--topbar-h); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  .tabs { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  .overlay { height: 100vh; height: 100dvh; }            /* окна не уезжают под адресную строку мобильного браузера */
+  .modal { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overscroll-behavior: contain; }
+  .citem { content-visibility: auto; contain-intrinsic-size: auto 78px; } /* длинные списки не рисуются, пока не доскроллили */
+  #scan-result:empty { display: none; }
+  #ls-more { width: 100%; margin-top: 12px; }
+
+  /* телефон/планшет с пальцем: крупные цели нажатия */
+  @media (pointer: coarse) {
+    .icon-btn { padding: 10px; }
+    .icon-btn svg { width: 18px; height: 18px; }
+    .modal-x { width: 40px; height: 40px; }
+    .btn-sm { padding: 11px 14px; }
+    .chip { padding: 9px 14px; }
+  }
+  @media (max-width: 380px) {
+    .wrap { padding-left: 12px; padding-right: 12px; }
+    .card { padding: 15px; }
+    .stat .n { font-size: 19px; }
+  }
+
+  /* планшет: чуть шире */
+  @media (min-width: 700px) { .wrap { max-width: 720px; } }
+
+  /* компьютер: меню слева, контент шире и в две колонки там, где это удобно */
+  @media (min-width: 960px) {
+    .topbar { position: sticky; top: 0; z-index: 30; }
+    .tabs { top: var(--topbar-h); bottom: auto; right: auto; left: 0; width: var(--side-w); height: calc(100vh - var(--topbar-h));
+            flex-direction: column; justify-content: flex-start; gap: 4px; padding: 16px 12px; border-top: none; border-right: 1px solid var(--line);
+            background: #fff; backdrop-filter: none; overflow-y: auto; }
+    .tab { flex: none; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; font-size: 14.5px; border-radius: 10px; text-align: left; }
+    .tab svg { width: 20px; height: 20px; flex: none; }
+    .tab:hover { background: #f1f4ef; }
+    .tab.active { background: var(--brand-soft); color: var(--brand-dark); }
+    .wrap { max-width: none; margin: 0 0 0 var(--side-w); padding: 28px 36px 56px; }
+    #view { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; align-items: start; max-width: 1180px; }
+    #view > .card, #view > #scan-result { margin-bottom: 0; }
+    #view > .stats { grid-column: 1 / -1; margin-bottom: 0; }
+    #view[data-view="list"], #view[data-view="print"] { grid-template-columns: minmax(0, 1fr); max-width: 980px; }
+    .modal { max-width: 480px; }
+    .stat { padding: 16px 8px; } .stat .n { font-size: 26px; } .stat .l { font-size: 12px; }
+    .btn-primary:hover, .btn-secondary:hover, .btn-ghost:hover { filter: brightness(.97); }
+    .citem:hover { border-color: #cfe0c8; }
+  }
+  @media (min-width: 1500px) { #view { grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); } }
+  @media print { #view { display: block !important; } .wrap { margin: 0 !important; } }
 </style>
 </head>
 <body>
@@ -2024,8 +2081,47 @@ window.addEventListener('DOMContentLoaded', function () {
   var savedUser = sessionStorage.getItem('crmUser');
   if (cardId && !savedUser) { renderPublic(cardId); return; }
   if (savedUser) { try { state.user = JSON.parse(savedUser); } catch (e) {} }
+  warmUpServer(); // пока человек вводит пароль/открывает экран — сервер Google уже просыпается
   if (state.user) renderApp(cardId); else renderLogin();
 });
+
+// ============================ ПРОГРЕВ СЕРВЕРА ============================
+// Google Apps Script «засыпает» без запросов, и первый запрос после паузы идёт 1–3 секунды вместо долей секунды.
+// Поэтому: будим сервер при открытии страницы и пока приложение открыто — раз в 4 минуты лёгким запросом ping.
+var KEEPALIVE_MS = 4 * 60 * 1000;
+var keepAliveTimer = null;
+function warmUpServer() {
+  if (!navigator.onLine) return;
+  apiGet('ping', {}).catch(function () { /* прогрев не критичен */ });
+}
+function startKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(function () {
+    if (document.visibilityState === 'visible') warmUpServer();
+  }, KEEPALIVE_MS);
+}
+function stopKeepAlive() { if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; } }
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible' && state.user) warmUpServer(); // вернулись во вкладку — сразу будим
+});
+
+/** Подтягивает список карт в фоне сразу после входа — вкладка «Карты» открывается мгновенно */
+function prefetchCards() {
+  if (!navigator.onLine) return;
+  apiGet('getCardsScreen', { q: '' }).then(function (res) {
+    if (!res || res.error || !res.cards) return;
+    state.cardsCache = res;
+    persistCache('cards', res);
+  }).catch(function () {});
+}
+
+/** Автокопия таблицы на Google Диск: сервер сам решает, нужна ли она (если прошлая старше ~20 часов). Запрос в фоне, кассир его не ждёт. */
+var autoBackupDone = false;
+function triggerAutoBackup() {
+  if (autoBackupDone || !navigator.onLine) return;
+  autoBackupDone = true;
+  apiPost('autoBackup', {}).catch(function () {});
+}
 
 // ============================ ПУБЛИЧНАЯ СТРАНИЦА ============================
 function renderPublic(cardId) {
@@ -2104,6 +2200,7 @@ function doLogin() {
 function doLogout() {
   stopScanner();
   nfcPhoneStop(true);
+  stopKeepAlive();
   state.user = null;
   sessionStorage.removeItem('crmUser');
   // убираем ?id из адреса, чтобы после выхода не улететь на публичную страницу
@@ -2152,6 +2249,9 @@ function renderApp(prefillCardId) {
   loadSettingsOnce();
   renderConnStatus();
   if (loadQueue().length) scheduleSync(200); // если остались несинхронизированные действия с прошлой сессии — досылаем
+  startKeepAlive();
+  setTimeout(prefetchCards, 500);       // после того как экран «Сканер» уже нарисован
+  setTimeout(triggerAutoBackup, 4000);  // и совсем в фоне — резервная копия, если пора
 }
 
 /** Настройки (фон наклейки, позиция QR) грузятся один раз за сессию и кэшируются — наклейки нигде не ждут лишний запрос */
@@ -2159,7 +2259,7 @@ function loadSettingsOnce() {
   if (state.settings) return;
   var cached = readCache('settings');
   if (cached) state.settings = cached;
-  apiGet('getSettings', {}).then(function (s) { state.settings = s || {}; persistCache('settings', state.settings); })
+  apiGet('getSettings', {}).then(function (s) { state.settings = s || {}; persistCache('settings', state.settings); applyMarkupFromServer(state.settings); })
     .catch(function () { if (!state.settings) state.settings = {}; });
 }
 
@@ -2175,6 +2275,7 @@ function go(name) {
     if (el) el.classList.toggle('active', t.id === name);
   });
   var v = document.getElementById('view');
+  v.setAttribute('data-view', name); // CSS на компьютере раскладывает карточки по колонкам в зависимости от вкладки
   if (name === 'scan') viewScan(v);
   else if (name === 'list') viewList(v);
   else if (name === 'new') viewNew(v);
@@ -2431,10 +2532,20 @@ function onScan(text) {
 
 /** source — откуда пришёл номер ('qr' — камера/ссылка, 'manual' — ввод руками): нужен для истории карты */
 function lookupCard(id, source) {
+  scanLoading();
   apiGet('getCardInfo', { id: id }).then(function (card) {
     renderScanResult(card);
     if (card && card.found) logScanEvent(card.id, source === 'qr' ? 'scan_qr' : 'scan_manual');
-  }).catch(function () { toast('Нет связи с сервером'); });
+  }).catch(function () {
+    var box = document.getElementById('scan-result');
+    if (box) box.innerHTML = '<div class="card"><p class="msg err" style="margin:0;">Нет связи с сервером — карту не удалось найти. Попробуйте ещё раз.</p></div>';
+  });
+}
+
+/** Мгновенная «заглушка» на время поиска: экран реагирует сразу, а не ждёт ответа сервера */
+function scanLoading() {
+  var box = document.getElementById('scan-result');
+  if (box) box.innerHTML = '<div class="card"><div class="skel skel-row" style="margin:0 0 8px;"></div><div class="skel skel-row" style="margin:0;"></div></div>';
 }
 
 function renderScanResult(card) {
@@ -2566,7 +2677,7 @@ function viewList(v) {
       '<div id="ls-selectbar"></div>' +
       '<div class="clist" id="ls-body" style="margin-top:14px;">' + (cached ? cardsListHtml(cached.cards) : skeletonRows(4)) + '</div>' +
     '</div>';
-  document.getElementById('ls-search').addEventListener('input', debounce(refreshList, 250));
+  document.getElementById('ls-search').addEventListener('input', debounce(function () { state.listLimit = LIST_PAGE; refreshList(); }, 250));
   document.getElementById('ls-select-toggle').onclick = toggleSelectMode;
   if (cached) wireListRows(cached.cards);
   // если кэш уже есть — показываем его мгновенно, а актуальные данные подтягиваем в фоне без мигания «Загрузка…»
@@ -2608,10 +2719,14 @@ function statsHtml(s) {
     '<div class="stat e"><div class="n">' + s.expired + '</div><div class="l">Истекли</div></div>';
 }
 
+// Список рисуется порциями: на тысячах карт страница не тормозит, а нужная карта находится поиском
+var LIST_PAGE = 40;
 function cardsListHtml(cards) {
   if (!cards || !cards.length) return '<p class="sub" style="margin:0;">Ничего не найдено.</p>';
   var sel = !!state.selectMode;
-  return cards.map(function (c) {
+  var limit = state.listLimit || LIST_PAGE;
+  var rest = cards.length - limit;
+  var html = cards.slice(0, limit).map(function (c) {
     var meta = [];
     if (c.phone) meta.push(esc(c.phone));
     if (c.endDate) meta.push('до ' + esc(c.endDate));
@@ -2636,11 +2751,19 @@ function cardsListHtml(cards) {
       '</div>' +
     '</div>';
   }).join('');
+  if (rest > 0) html += '<button class="btn-ghost" id="ls-more">Показать ещё (' + rest + ')</button>';
+  return html;
 }
 
 function wireListRows(cards) {
   var body = document.getElementById('ls-body'); if (!body) return;
-  cards.forEach(function (c) {
+  var more = document.getElementById('ls-more');
+  if (more) more.onclick = function () {
+    state.listLimit = (state.listLimit || LIST_PAGE) + LIST_PAGE * 2;
+    body.innerHTML = cardsListHtml(cards);
+    wireListRows(cards);
+  };
+  cards.slice(0, state.listLimit || LIST_PAGE).forEach(function (c) {
     var row = body.querySelector('[data-row="' + cssEsc(c.id) + '"]'); if (!row) return;
     if (state.selectMode) {
       row.onclick = function () {
@@ -2978,6 +3101,7 @@ function viewSettings(v) {
       '<button class="btn-primary" id="pw-save">Сменить пароль</button>' +
       '<div id="pw-msg" class="msg"></div>' +
     '</div>' + adminExtra +
+    (isAdmin ? '<div class="card" id="backup-card"><h2>Резервная копия в Google</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="bg-card"><h2>Фон для наклейки карты</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="nfc-admin-card"><h2>NFC-метки</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="products-card"><h2>Товары и цены</h2><p class="sub">Загрузка…</p></div>' : '') +
@@ -2998,7 +3122,52 @@ function viewSettings(v) {
       else { msg.className = 'msg err'; msg.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); });
   };
-  if (isAdmin) { renderBgSettings(); renderNfcAdminBlock(); renderProductsBlock(); renderJournalBlock(); }
+  if (isAdmin) { renderBackupBlock(); renderBgSettings(); renderNfcAdminBlock(); renderProductsBlock(); renderJournalBlock(); }
+}
+
+/** «Ещё → Резервная копия в Google»: где лежат данные, когда была последняя копия, кнопка «сделать копию сейчас» */
+function renderBackupBlock() {
+  var card = document.getElementById('backup-card');
+  if (!card) return;
+  card.innerHTML =
+    '<h2>Резервная копия в Google</h2>' +
+    '<p class="sub">Все карты, клиенты, метки и история хранятся в вашей Google Таблице и сохраняются туда сразу при каждом действии — сайт сам ничего не хранит. ' +
+    'Дополнительно раз в сутки создаётся полная копия таблицы на Google Диске (хранятся последние 14).</p>' +
+    '<div id="bk-info"><div class="skel skel-row" style="margin:0;"></div></div>' +
+    '<button class="btn-secondary" id="bk-now" style="width:100%; margin-top:12px;">Создать копию сейчас</button>' +
+    '<div id="bk-msg" class="msg"></div>';
+  document.getElementById('bk-now').onclick = function () {
+    var btn = this, msg = document.getElementById('bk-msg');
+    setBtnLoading(btn, 'Копируем таблицу…');
+    apiPost('createBackup', { actorRole: state.user.role, username: state.user.username }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { toast('Копия создана'); msg.className = 'msg ok'; msg.textContent = 'Готово: ' + res.name; showBackupInfo(res.info); }
+      else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  };
+  apiGet('getBackupInfo', { role: state.user.role }).then(function (info) {
+    if (!info || info.error) { var el = document.getElementById('bk-info'); if (el) el.innerHTML = '<p class="msg err" style="margin:0;">Не удалось загрузить сведения о копиях' + (info && info.error ? ': ' + esc(info.error) : '') + '</p>'; return; }
+    showBackupInfo(info);
+  }).catch(function () {
+    var el = document.getElementById('bk-info');
+    if (el) el.innerHTML = '<p class="msg err" style="margin:0;">Нет связи с сервером</p>';
+  });
+}
+
+function showBackupInfo(info) {
+  var el = document.getElementById('bk-info');
+  if (!el || !info) return;
+  var stale = info.lastBackupTs && (Date.now() - info.lastBackupTs) > 3 * 24 * 3600 * 1000;
+  el.innerHTML =
+    '<dl class="kv" style="margin:6px 0 0;">' +
+      '<dt>Последняя копия</dt><dd>' + (info.lastBackupAt ? esc(info.lastBackupAt) + (info.lastBackupBy ? ' <span style="font-weight:400; color:var(--muted);">· ' + (info.lastBackupBy === 'auto' ? 'автоматически' : esc(info.lastBackupBy)) + '</span>' : '') : 'ещё не делалась') + '</dd>' +
+      '<dt>Копий на Диске</dt><dd>' + info.count + ' из ' + info.keep + '</dd>' +
+    '</dl>' +
+    (stale ? '<p class="msg err" style="margin:8px 0 0;">Последняя копия старше трёх дней — нажмите «Создать копию сейчас» и проверьте, что в таблице всё в порядке.</p>' : '') +
+    '<div class="row-btns" style="margin-top:12px;">' +
+      (info.spreadsheetUrl ? '<a class="btn-ghost" style="text-align:center; text-decoration:none; padding:12px 16px; border-radius:10px; font-weight:600; color:var(--ink); flex:1; min-width:110px;" href="' + esc(info.spreadsheetUrl) + '" target="_blank" rel="noopener">Открыть таблицу</a>' : '') +
+      (info.folderUrl ? '<a class="btn-ghost" style="text-align:center; text-decoration:none; padding:12px 16px; border-radius:10px; font-weight:600; color:var(--ink); flex:1; min-width:110px;" href="' + esc(info.folderUrl) + '" target="_blank" rel="noopener">Папка с копиями</a>' : '') +
+    '</div>';
 }
 
 /** Блок настроек фона наклейки — грузим свежие настройки при каждом открытии вкладки, чтобы админ всегда видел актуальное состояние */
@@ -3010,6 +3179,7 @@ function renderBgSettings() {
       return;
     }
     state.settings = s;
+    applyMarkupFromServer(s);
     persistCache('settings', s);
     var card = document.getElementById('bg-card');
     if (!card) return; // ушли с вкладки, пока грузилось
@@ -3158,16 +3328,44 @@ function resizeImageFile(file, maxDim, quality) {
 
 // ============================ ТОВАРЫ И ЦЕНЫ (только админ) ============================
 // Проценты наценки для колонок — личная настройка устройства (не требует похода на сервер), по умолчанию 25/30/35%
+// Проценты наценки хранятся в Google Таблице (лист Settings) — одинаковы на всех устройствах и попадают в резервную копию.
+// В браузере остаётся только локальная копия для мгновенного показа и работы без связи.
 var MARKUP_KEY = 'loyaltyMarkupPercentsV1';
-function loadMarkupPercents() {
+var MARKUP_DEFAULT = [25, 30, 35];
+function readLocalMarkup() {
   try {
     var v = JSON.parse(localStorage.getItem(MARKUP_KEY) || 'null');
-    if (Array.isArray(v) && v.length === 3) return v;
+    if (Array.isArray(v) && v.length === 3) return v.map(Number);
   } catch (e) {}
-  return [25, 30, 35];
+  return null;
+}
+function loadMarkupPercents() {
+  return readLocalMarkup() || (state.settings && state.settings.markupStored && state.settings.markupPercents) || MARKUP_DEFAULT;
 }
 function saveMarkupPercents(arr) {
   try { localStorage.setItem(MARKUP_KEY, JSON.stringify(arr)); } catch (e) {}
+  if (state.settings) { state.settings.markupPercents = arr; state.settings.markupStored = true; persistCache('settings', state.settings); }
+  if (state.user && state.user.role === 'admin') {
+    apiPostResilient('saveSettings', { actorRole: 'admin', markupPercents: arr }).catch(function () {});
+  }
+}
+/** Согласует локальные проценты с таблицей: если в таблице уже есть значения — они главные; если нет — отправляем туда те, что были в этом браузере */
+function applyMarkupFromServer(s) {
+  if (!s) return;
+  var local = readLocalMarkup();
+  if (s.markupStored && Array.isArray(s.markupPercents)) {
+    if (!local || local.join(';') !== s.markupPercents.join(';')) {
+      try { localStorage.setItem(MARKUP_KEY, JSON.stringify(s.markupPercents)); } catch (e) {}
+      ['pm-pct-0', 'pm-pct-1', 'pm-pct-2'].forEach(function (id, i) {
+        var el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = s.markupPercents[i];
+      });
+      var body = document.getElementById('pm-body');
+      if (body && state.productsCache) { body.innerHTML = productsListHtml(state.productsCache); wireProductRows(state.productsCache); }
+    }
+  } else if (local && local.join(';') !== MARKUP_DEFAULT.join(';') && state.user && state.user.role === 'admin') {
+    apiPost('saveSettings', { actorRole: 'admin', markupPercents: local }).catch(function () {}); // единоразовый перенос в таблицу
+  }
 }
 /** Цена с наценкой, округлённая до целого рубля — так удобнее ставить реальные ценники */
 function priceWithMarkup(purchasePrice, pct) {
@@ -3495,7 +3693,7 @@ function lookupNfc(raw) {
   var box = document.getElementById('scan-result');
   if (!box) return;
   var seq = ++state.nfc.seq;
-  box.innerHTML = '<div class="card"><div class="skel skel-row" style="margin:0 0 8px;"></div><div class="skel skel-row" style="margin:0;"></div></div>';
+  scanLoading();
   try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
   apiGet('getCardByNfc', { uid: raw }).then(function (res) {
     if (seq !== state.nfc.seq) return;
@@ -3509,6 +3707,7 @@ function lookupNfc(raw) {
 /** Поиск из поля «номер карты»: если ввод похож на UID (его так «печатает» USB-считыватель) — сначала ищем метку, потом карту с таким номером */
 function smartLookup(v) {
   if (!looksLikeUid(v)) { lookupCard(v, 'manual'); return; }
+  scanLoading();
   var seq = ++state.nfc.seq;
   apiGet('getCardByNfc', { uid: v }).then(function (res) {
     if (seq !== state.nfc.seq) return;
