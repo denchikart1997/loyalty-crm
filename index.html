@@ -143,6 +143,30 @@
   .conn-badge.hidden { display: none; }
   .conn-badge.conn-off { background: var(--red-soft); color: var(--red); }
   .conn-badge.conn-sync { background: var(--amber-soft); color: var(--amber); }
+
+  /* ---- NFC и история карты ---- */
+  .nfc-usb { margin-top: 12px; }
+  .nfc-usb input { font-family: ui-monospace, Menlo, monospace; text-align: center; letter-spacing: .04em; border: 2px dashed var(--line); }
+  .nfc-usb input:focus { border-style: solid; }
+  .nfc-pulse { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--brand); margin-right: 7px; vertical-align: middle; animation: nfc-pulse 1.4s ease-in-out infinite; }
+  @keyframes nfc-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  .nfc-note { display: flex; align-items: center; gap: 8px; background: var(--brand-soft); color: var(--brand-dark); border-radius: 10px; padding: 9px 12px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  .nfc-note svg { width: 18px; height: 18px; flex: none; }
+  .nfc-note span { min-width: 0; word-break: break-word; }
+  .nfc-alert { background: var(--red-soft); color: var(--red); border-radius: 10px; padding: 11px 13px; font-size: 14px; font-weight: 700; margin: 12px 0; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .chip { padding: 6px 12px; border-radius: 100px; font-size: 12.5px; font-weight: 700; background: #f1f4ef; color: var(--muted); }
+  .chip.on { background: var(--brand-soft); color: var(--brand-dark); }
+  .hist { display: flex; flex-direction: column; margin-top: 6px; }
+  .hist-item { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--muted); }
+  .hist-dot.ok { background: var(--brand); } .hist-dot.warn { background: var(--amber); } .hist-dot.bad { background: var(--red); } .hist-dot.info { background: #3a7bd5; }
+  .hist-title { font-weight: 700; font-size: 14px; }
+  .hist-title .hist-card { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+  .hist-det { font-size: 13px; word-break: break-word; margin-top: 1px; }
+  .hist-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -1757,7 +1781,8 @@ var ICON = {
   trash: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  x: '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>'
+  x: '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
+  nfc: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 8.5a5.5 5.5 0 010 7M10 6a9.5 9.5 0 010 12M14 3.5a13.5 13.5 0 010 17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>'
 };
 
 var STATUS_LABEL = { active: 'Активна', soon: 'Скоро истекает', expired: 'Истекла', no_data: 'Нет данных' };
@@ -1987,7 +2012,8 @@ function baseUrl() { return window.location.origin + window.location.pathname; }
 function cardLink(id) { return baseUrl() + '?id=' + encodeURIComponent(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' })[c]; }); }
 
-var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null, settings: null, cardsCache: null, staffCache: null, activeTab: null, productsCache: null };
+var state = { user: null, scanning: false, starting: false, stream: null, rafId: null, startTimeout: null, settings: null, cardsCache: null, staffCache: null, activeTab: null, productsCache: null,
+  nfc: { abort: null, owner: null, onStop: null, lastUid: '', lastAt: 0, seq: 0, usbOn: false, usbTimer: null }, nfcTags: [], hist: null, journal: null };
 var root = document.getElementById('root');
 
 // ============================ РОУТИНГ ПРИ ЗАГРУЗКЕ ============================
@@ -2077,6 +2103,7 @@ function doLogin() {
 
 function doLogout() {
   stopScanner();
+  nfcPhoneStop(true);
   state.user = null;
   sessionStorage.removeItem('crmUser');
   // убираем ?id из адреса, чтобы после выхода не улететь на публичную страницу
@@ -2119,7 +2146,7 @@ function renderApp(prefillCardId) {
     nav.appendChild(b);
   });
 
-  if (prefillCardId) { go('scan'); setTimeout(function () { lookupCard(prefillCardId); }, 60); }
+  if (prefillCardId) { go('scan'); setTimeout(function () { lookupCard(prefillCardId, 'qr'); }, 60); }
   else go('scan');
 
   loadSettingsOnce();
@@ -2138,7 +2165,11 @@ function loadSettingsOnce() {
 
 function go(name) {
   state.activeTab = name;
-  if (name !== 'scan') stopScanner();
+  if (name !== 'scan') {
+    stopScanner();
+    if (state.nfc.owner === 'scan') nfcPhoneStop(true); // телефонное NFC-чтение живёт только на вкладке «Сканер»
+    state.nfc.usbOn = false;
+  }
   state.tabs.forEach(function (t) {
     var el = document.getElementById('tab-' + t.id);
     if (el) el.classList.toggle('active', t.id === name);
@@ -2168,14 +2199,27 @@ function viewScan(v) {
         '<button class="btn-secondary" id="scan-find" style="white-space:nowrap;">Найти</button>' +
       '</div>' +
     '</div>' +
+    '<div class="card" id="nfc-card">' +
+      '<h2>NFC-карта</h2>' +
+      '<p class="sub">Приложите карту к считывателю: USB-модулю на компьютере или NFC телефона.</p>' +
+      '<div class="row-btns">' +
+        '<button class="btn-secondary" id="nfc-phone-btn">Считывать телефоном</button>' +
+        '<button class="btn-secondary" id="nfc-usb-btn">USB-считыватель</button>' +
+      '</div>' +
+      '<div class="nfc-usb hidden" id="nfc-usb-zone">' +
+        '<input id="nfc-usb-input" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Приложите карту…">' +
+      '</div>' +
+      '<div id="nfc-status" class="msg hidden" style="text-align:center;"></div>' +
+    '</div>' +
     '<div id="scan-result"></div>';
   document.getElementById('scan-btn').onclick = toggleScanner;
   document.getElementById('scan-find').onclick = function () {
-    var id = document.getElementById('scan-manual').value.trim(); if (id) lookupCard(id);
+    var id = document.getElementById('scan-manual').value.trim(); if (id) smartLookup(id);
   };
   document.getElementById('scan-manual').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { var id = this.value.trim(); if (id) lookupCard(id); }
+    if (e.key === 'Enter') { var id = this.value.trim(); if (id) smartLookup(id); }
   });
+  wireNfcCard();
 }
 
 function scanStatus(text, isErr) {
@@ -2382,11 +2426,15 @@ function onScan(text) {
   stopScanner();
   var id = text; var m = String(text).match(/[?&]id=([^&]+)/); if (m) id = decodeURIComponent(m[1]);
   var inp = document.getElementById('scan-manual'); if (inp) inp.value = id;
-  lookupCard(id);
+  lookupCard(id, 'qr');
 }
 
-function lookupCard(id) {
-  apiGet('getCardInfo', { id: id }).then(renderScanResult);
+/** source — откуда пришёл номер ('qr' — камера/ссылка, 'manual' — ввод руками): нужен для истории карты */
+function lookupCard(id, source) {
+  apiGet('getCardInfo', { id: id }).then(function (card) {
+    renderScanResult(card);
+    if (card && card.found) logScanEvent(card.id, source === 'qr' ? 'scan_qr' : 'scan_manual');
+  }).catch(function () { toast('Нет связи с сервером'); });
 }
 
 function renderScanResult(card) {
@@ -2424,6 +2472,10 @@ function renderScanResult(card) {
       '<div class="row-btns" style="margin-top:12px;">' +
         '<button class="btn-primary" style="margin:0;" id="rn-btn" onclick="doRenew(\'' + esc(card.id) + '\')">Продлить</button>' +
         '<button class="btn-ghost" onclick="showQrModal(\'' + esc(card.id) + '\')">Показать QR</button>' +
+      '</div>' +
+      '<div class="row-btns" style="margin-top:8px;">' +
+        '<button class="btn-ghost" onclick="showHistoryModal(\'' + esc(card.id) + '\')">История карты</button>' +
+        '<button class="btn-ghost" onclick="showCardNfcModal(\'' + esc(card.id) + '\')">NFC-метки</button>' +
       '</div>' +
     '</div>';
   state.lastCard = card.id;
@@ -2577,6 +2629,7 @@ function cardsListHtml(cards) {
         '<span class="badge s-' + c.status + '">' + STATUS_LABEL[c.status] + '</span>' +
         (sel ? '' : '<div style="display:flex; gap:6px;">' +
           '<span class="icon-btn" title="QR-код" data-qr="' + esc(c.id) + '">' + ICON.qr + '</span>' +
+          '<span class="icon-btn" title="История" data-hist="' + esc(c.id) + '">' + ICON.clock + '</span>' +
           '<span class="icon-btn" title="Изменить" data-edit="' + esc(c.id) + '">' + ICON.edit + '</span>' +
           '<span class="icon-btn" title="Удалить" data-del="' + esc(c.id) + '" style="color:var(--red);">' + ICON.trash + '</span>' +
         '</div>') +
@@ -2601,6 +2654,7 @@ function wireListRows(cards) {
     }
     row.onclick = null;
     row.querySelector('[data-qr]').onclick = function () { showQrModal(c.id); };
+    row.querySelector('[data-hist]').onclick = function () { showHistoryModal(c.id); };
     row.querySelector('[data-edit]').onclick = function () { showEditModal(c); };
     row.querySelector('[data-del]').onclick = function () { confirmDeleteCard(c, row); };
   });
@@ -2637,7 +2691,7 @@ function confirmDeleteCard(c, rowEl) {
     if (rowEl) { rowEl.classList.add('removing'); setTimeout(function () { if (rowEl.parentNode) rowEl.remove(); }, 180); }
     if (state.cardsCache) state.cardsCache.cards = state.cardsCache.cards.filter(function (x) { return x.id !== c.id; });
     toast('Карта удаляется…');
-    apiPostResilient('deleteCard', { cardId: c.id }).then(function (res) {
+    apiPostResilient('deleteCard', { cardId: c.id, username: state.user.username }).then(function (res) {
       if (res.queued) { toast('Нет связи — удаление отправится само'); return; }
       if (res.success) { toast('Карта удалена'); }
       else { alert(res.error); refreshList(); } // если сервер отказал — переcобираем список, чтобы вернуть строку обратно
@@ -2661,8 +2715,15 @@ function showEditModal(c) {
       '<select id="ed-months" style="flex:1;">' + monthOptionsHtml() + '</select>' +
       '<button class="btn-secondary" id="ed-renew" style="white-space:nowrap; margin:0;">Продлить</button>' +
     '</div>' +
-    '<p class="sub" id="ed-enddate" style="margin-top:8px; margin-bottom:0;">Сейчас: ' + (c.endDate ? 'действует до ' + esc(c.endDate) : 'карта ещё не выдана клиенту') + '</p>'
+    '<p class="sub" id="ed-enddate" style="margin-top:8px; margin-bottom:0;">Сейчас: ' + (c.endDate ? 'действует до ' + esc(c.endDate) : 'карта ещё не выдана клиенту') + '</p>' +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:18px 0 14px;">' +
+    '<div class="row-btns">' +
+      '<button class="btn-ghost" id="ed-hist">История карты</button>' +
+      '<button class="btn-ghost" id="ed-nfc">NFC-метки</button>' +
+    '</div>'
   );
+  document.getElementById('ed-hist').onclick = function () { showHistoryModal(c.id); };
+  document.getElementById('ed-nfc').onclick = function () { showCardNfcModal(c.id); };
   document.getElementById('ed-save').onclick = function () {
     apiPostResilient('updateCard', {
       username: state.user.username, cardId: c.id,
@@ -2780,7 +2841,7 @@ function viewPrint(v) {
     var btn = this;
     var count = parseInt(document.getElementById('pr-count').value, 10) || 1;
     setBtnLoading(btn, 'Готовим наклейки…');
-    apiPost('reserveNewCardIds', { count: count }).then(function (ids) {
+    apiPost('reserveNewCardIds', { count: count, username: state.user.username }).then(function (ids) {
       clearBtnLoading(btn);
       state.lastBatchIds = ids || [];
       var grid = document.getElementById('pr-grid');
@@ -2918,9 +2979,11 @@ function viewSettings(v) {
       '<div id="pw-msg" class="msg"></div>' +
     '</div>' + adminExtra +
     (isAdmin ? '<div class="card" id="bg-card"><h2>Фон для наклейки карты</h2><p class="sub">Загрузка…</p></div>' : '') +
+    (isAdmin ? '<div class="card" id="nfc-admin-card"><h2>NFC-метки</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="products-card"><h2>Товары и цены</h2><p class="sub">Загрузка…</p></div>' : '') +
+    (isAdmin ? '<div class="card" id="journal-card"><h2>Журнал событий</h2><p class="sub">Загрузка…</p></div>' : '') +
     '<div class="card"><h2>Как выдавать карты клиентам</h2>' +
-    '<p class="sub" style="margin:0;">Клиент может сам навести камеру телефона на QR своей карты — откроется страница со статусом подписки и датой окончания, без каких-либо данных других клиентов.</p></div>';
+    '<p class="sub" style="margin:0;">Клиент может сам навести камеру телефона на QR своей карты — откроется страница со статусом подписки и датой окончания, без каких-либо данных других клиентов. Если на NFC-метку записана ссылка (кнопка в настройках метки), то же самое работает при поднесении карты к телефону.</p></div>';
   document.getElementById('pw-save').onclick = function () {
     var btn = this;
     var msg = document.getElementById('pw-msg');
@@ -2935,7 +2998,7 @@ function viewSettings(v) {
       else { msg.className = 'msg err'; msg.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); });
   };
-  if (isAdmin) { renderBgSettings(); renderProductsBlock(); }
+  if (isAdmin) { renderBgSettings(); renderNfcAdminBlock(); renderProductsBlock(); renderJournalBlock(); }
 }
 
 /** Блок настроек фона наклейки — грузим свежие настройки при каждом открытии вкладки, чтобы админ всегда видел актуальное состояние */
@@ -3282,6 +3345,714 @@ function exportCsv() {
   window.open(API_BASE_URL + '?action=exportCsv', '_blank');
 }
 
+// ============================ NFC: ЧТЕНИЕ, МЕТКИ, ИСТОРИЯ КАРТЫ ============================
+// Откуда берётся номер (UID) NFC-карты:
+//  • USB-считыватель на компьютере работает как клавиатура: «печатает» UID и Enter в активное поле;
+//  • NFC в телефоне — Web NFC (NDEFReader): только Chrome на Android и только по HTTPS.
+// Связь «метка ↔ карта лояльности» хранится на сервере (лист NfcTags). Формат записи UID сервер
+// сопоставляет сам (hex, hex задом наперёд, десятичное число), поэтому одну и ту же карту можно
+// привязать на компьютере, а потом читать телефоном — и наоборот.
+
+var USB_AUTO_KEY = 'loyaltyNfcUsbAuto';
+function usbAutoSubmit() { try { return localStorage.getItem(USB_AUTO_KEY) !== '0'; } catch (e) { return true; } }
+function setUsbAutoSubmit(on) { try { localStorage.setItem(USB_AUTO_KEY, on ? '1' : '0'); } catch (e) {} }
+
+function nfcSupported() { return 'NDEFReader' in window; }
+
+/** Похоже ли введённое на номер NFC-метки (так «печатает» USB-считыватель), а не на номер карты вида LC-000123 */
+function looksLikeUid(v) {
+  var s = String(v || '').replace(/[\s:\-.]/g, '');
+  return /^[0-9A-Fa-f]{8,32}$/.test(s);
+}
+
+function nfcStatus(text, isErr, live) {
+  var el = document.getElementById('nfc-status');
+  if (!el) return;
+  el.innerHTML = (live ? '<span class="nfc-pulse"></span>' : '') + esc(text || '');
+  el.className = 'msg' + (isErr ? ' err' : '');
+  el.classList.toggle('hidden', !text);
+}
+
+// ---- Считывание NFC телефоном (Web NFC) ----
+/** owner: 'scan' (вкладка «Сканер») или 'modal' (окно привязки метки); onStop вызывается, когда чтение остановилось. Возвращает false, если запуск невозможен. */
+function nfcPhoneStart(onUid, onMsg, owner, onStop) {
+  nfcPhoneStop(true);
+  if (!nfcSupported()) {
+    onMsg('Считывание NFC телефоном работает только в Chrome на Android (по HTTPS). На компьютере используйте USB-считыватель или введите UID вручную.', true);
+    return false;
+  }
+  var ctrl = new AbortController();
+  var reader;
+  try { reader = new NDEFReader(); } catch (e) { onMsg('NFC недоступен в этом браузере.', true); return false; }
+  state.nfc.abort = ctrl;
+  state.nfc.owner = owner;
+  state.nfc.onStop = onStop || null;
+  reader.onreading = function (ev) {
+    if (ev && ev.serialNumber) onUid(ev.serialNumber);
+    else onMsg('Метка найдена, но её номер (UID) прочитать не удалось.', true);
+  };
+  reader.onreadingerror = function () {
+    onMsg('Метка найдена, но не прочитана. Телефон читает NTAG-карты и брелоки; карты других типов (например MIFARE Classic) надёжнее считывать USB-модулем.', true);
+  };
+  reader.scan({ signal: ctrl.signal }).then(function () {
+    onMsg('Поднесите карту к задней стороне телефона…', false, true);
+  }).catch(function (err) {
+    if (ctrl.signal.aborted) return;
+    var n = err && err.name;
+    if (n === 'NotAllowedError') onMsg('Доступ к NFC не разрешён. Разрешите NFC для этого сайта в настройках браузера.', true);
+    else if (n === 'NotSupportedError') onMsg('NFC на этом телефоне выключен или отсутствует. Включите NFC в настройках телефона.', true);
+    else onMsg('Не удалось включить NFC' + (err && err.message ? ': ' + err.message : ''), true);
+    nfcPhoneStop(false);
+  });
+  return true;
+}
+
+function nfcPhoneStop(silent) {
+  if (state.nfc.abort) { try { state.nfc.abort.abort(); } catch (e) {} state.nfc.abort = null; }
+  var f = state.nfc.onStop;
+  state.nfc.onStop = null;
+  state.nfc.owner = null;
+  if (!silent && f) f();
+}
+
+// ---- Вкладка «Сканер»: блок NFC ----
+function wireNfcCard() {
+  var phoneBtn = document.getElementById('nfc-phone-btn');
+  var usbBtn = document.getElementById('nfc-usb-btn');
+  var inp = document.getElementById('nfc-usb-input');
+  if (!phoneBtn || !usbBtn || !inp) return;
+  state.nfc.usbOn = false;
+
+  phoneBtn.onclick = function () {
+    if (state.nfc.owner === 'scan' && state.nfc.abort) { nfcPhoneStop(false); return; }
+    var ok = nfcPhoneStart(function (uid) { onNfcUid(uid, 'phone'); }, nfcStatus, 'scan', function () {
+      var b = document.getElementById('nfc-phone-btn');
+      if (b) b.textContent = 'Считывать телефоном';
+      var s = document.getElementById('nfc-status');
+      if (s && !s.classList.contains('err')) nfcStatus('');
+    });
+    if (ok) phoneBtn.textContent = 'Остановить чтение телефоном';
+  };
+
+  usbBtn.onclick = function () { setUsbMode(!state.nfc.usbOn); };
+
+  inp.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); submitUsb(); }
+  });
+  inp.addEventListener('input', function () {
+    // некоторые модули не шлют Enter — тогда считаем ввод законченным после короткой паузы
+    clearTimeout(state.nfc.usbTimer);
+    if (usbAutoSubmit() && inp.value.replace(/[\s:\-.]/g, '').length >= 8) state.nfc.usbTimer = setTimeout(submitUsb, 350);
+  });
+  inp.addEventListener('blur', function () {
+    if (!state.nfc.usbOn) return;
+    // пока включён режим считывателя, возвращаем фокус в поле — иначе «набранный» картой UID уйдёт в никуда
+    setTimeout(function () {
+      var a = document.activeElement;
+      if (state.nfc.usbOn && (!a || a === document.body)) inp.focus();
+    }, 150);
+  });
+}
+
+function setUsbMode(on) {
+  var zone = document.getElementById('nfc-usb-zone');
+  var btn = document.getElementById('nfc-usb-btn');
+  var inp = document.getElementById('nfc-usb-input');
+  if (!zone || !btn || !inp) return;
+  state.nfc.usbOn = !!on;
+  zone.classList.toggle('hidden', !on);
+  btn.textContent = on ? 'Выключить USB-считыватель' : 'USB-считыватель';
+  if (on) {
+    inp.value = '';
+    inp.focus();
+    nfcStatus('USB-считыватель включён — приложите карту', false, true);
+  } else {
+    clearTimeout(state.nfc.usbTimer);
+    if (!state.nfc.abort) nfcStatus('');
+  }
+}
+
+function submitUsb() {
+  clearTimeout(state.nfc.usbTimer);
+  var inp = document.getElementById('nfc-usb-input');
+  if (!inp) return;
+  var v = inp.value.trim();
+  inp.value = '';
+  if (v) onNfcUid(v, 'usb');
+}
+
+/** Единая точка входа для любого считанного номера метки (телефон или USB) */
+function onNfcUid(raw, source) {
+  var key = String(raw).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+  var now = Date.now();
+  if (key === state.nfc.lastUid && now - state.nfc.lastAt < 2500) return; // карта лежит на считывателе — не обрабатываем её по кругу
+  state.nfc.lastUid = key;
+  state.nfc.lastAt = now;
+  lookupNfc(raw);
+}
+
+function lookupNfc(raw) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  var seq = ++state.nfc.seq;
+  box.innerHTML = '<div class="card"><div class="skel skel-row" style="margin:0 0 8px;"></div><div class="skel skel-row" style="margin:0;"></div></div>';
+  try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
+  apiGet('getCardByNfc', { uid: raw }).then(function (res) {
+    if (seq !== state.nfc.seq) return;
+    renderNfcResult(res, raw);
+  }).catch(function () {
+    if (seq !== state.nfc.seq) return;
+    box.innerHTML = '<div class="card"><p class="msg err" style="margin:0;">Нет связи с сервером — метку не удалось проверить. Приложите карту ещё раз.</p></div>';
+  });
+}
+
+/** Поиск из поля «номер карты»: если ввод похож на UID (его так «печатает» USB-считыватель) — сначала ищем метку, потом карту с таким номером */
+function smartLookup(v) {
+  if (!looksLikeUid(v)) { lookupCard(v, 'manual'); return; }
+  var seq = ++state.nfc.seq;
+  apiGet('getCardByNfc', { uid: v }).then(function (res) {
+    if (seq !== state.nfc.seq) return;
+    if (res && res.found) { renderNfcResult(res, v); return; }
+    return apiGet('getCardInfo', { id: v }).then(function (card) {
+      if (seq !== state.nfc.seq) return;
+      if (card && card.found) { renderScanResult(card); logScanEvent(card.id, 'scan_manual'); }
+      else renderUnknownTag(res && res.uid ? res.uid : v);
+    });
+  }).catch(function () { toast('Нет связи с сервером'); });
+}
+
+function logScanEvent(cardId, type, uid) {
+  if (!state.user || !navigator.onLine) return;
+  apiPost('logCardEvent', { username: state.user.username, cardId: cardId, type: type, uid: uid || '' }).catch(function () { /* журнал не должен мешать кассиру */ });
+}
+
+function nfcNoteHtml(tag) {
+  return '<div class="nfc-note">' + ICON.nfc + '<span>Считано по NFC' + (tag.label ? ' · ' + esc(tag.label) : '') + ' · <span class="mono">' + esc(tag.uid) + '</span></span></div>';
+}
+
+function renderNfcResult(res, raw) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  if (!res || res.error) {
+    box.innerHTML = '<div class="card"><h2>Метка не распознана</h2><p class="msg err">' + esc((res && res.error) || 'Ошибка сервера') +
+      (res && res.uid ? '<br><span class="mono">' + esc(res.uid) + '</span>' : '') + '</p></div>';
+    return;
+  }
+  if (!res.found) { renderUnknownTag(res.uid || raw); return; }
+  var tag = res.tag, card = res.card;
+  if (!card || !card.found) {
+    box.innerHTML = '<div class="card"><h2>Карта метки не найдена</h2>' +
+      '<p class="sub">Метка <span class="mono">' + esc(tag.uid) + '</span> привязана к карте ' + esc(tag.cardId) + ', но этой карты уже нет в базе.' +
+      (state.user.role === 'admin' ? ' Удалите метку в «Ещё → NFC-метки», чтобы привязать её заново.' : ' Сообщите администратору.') + '</p></div>';
+    return;
+  }
+  if (tag.status === 'blocked') { renderBlockedTag(tag, card); logScanEvent(card.id, 'nfc_denied', tag.uid); return; }
+  renderScanResult(card);
+  box.insertAdjacentHTML('afterbegin', nfcNoteHtml(tag));
+  logScanEvent(card.id, 'scan_nfc', tag.uid);
+}
+
+function renderBlockedTag(tag, card) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  box.innerHTML = '<div class="card">' +
+    '<div class="nfc-alert">Метка заблокирована — карту по ней обслуживать нельзя</div>' +
+    '<h2>' + esc(card.name || 'Без имени') + '</h2>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(card.id) + ' · метка ' + esc(tag.uid) + (tag.label ? ' (' + esc(tag.label) + ')' : '') + '</p>' +
+    '<div class="row-btns" style="margin-top:14px;">' +
+      '<button class="btn-secondary" id="bt-unblock">Разблокировать метку</button>' +
+      '<button class="btn-ghost" id="bt-hist">История карты</button>' +
+    '</div><div id="bt-msg" class="msg"></div></div>';
+  document.getElementById('bt-hist').onclick = function () { showHistoryModal(card.id); };
+  document.getElementById('bt-unblock').onclick = function () {
+    var btn = this;
+    setBtnLoading(btn, 'Разблокируем…');
+    apiPost('updateNfcTag', { actorRole: state.user.role, username: state.user.username, uid: tag.uid, status: 'active' }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { toast('Метка разблокирована'); lookupNfc(tag.uid); }
+      else { var m = document.getElementById('bt-msg'); m.className = 'msg err'; m.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); var m = document.getElementById('bt-msg'); m.className = 'msg err'; m.textContent = 'Нет связи с сервером'; });
+  };
+}
+
+/** Метка не привязана ни к одной карте — выдаём новую карту сразу с этой меткой или привязываем к уже существующей */
+function renderUnknownTag(uid) {
+  var box = document.getElementById('scan-result');
+  if (!box) return;
+  box.innerHTML = '<div class="card">' +
+    '<div style="display:flex; justify-content:space-between; align-items:center;">' +
+      '<h2>Метка не привязана</h2><span class="badge s-no_data">Новая</span>' +
+    '</div>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(uid) + '</p>' +
+    '<p class="sub" style="margin-top:10px;">Эта NFC-карта ещё не знакома системе. Оформите на неё новую карту лояльности:</p>' +
+    '<label style="margin-top:0;">Имя клиента</label><input id="nf-name">' +
+    '<label>Телефон</label><input id="nf-phone" inputmode="tel" placeholder="+7…">' +
+    '<label>Срок подписки</label><select id="nf-months">' + monthOptionsHtml() + '</select>' +
+    '<button class="btn-primary" id="nf-issue">Выдать карту с этой меткой</button>' +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:18px 0 6px;">' +
+    '<label>…или привязать метку к уже существующей карте</label>' +
+    '<div style="display:flex; gap:8px;">' +
+      '<input id="nf-card" placeholder="LC-000123" style="flex:1;">' +
+      '<button class="btn-secondary" id="nf-link" style="white-space:nowrap; margin:0;">Привязать</button>' +
+    '</div>' +
+    '<div id="nf-msg" class="msg"></div></div>';
+
+  function fail(text) { var m = document.getElementById('nf-msg'); if (m) { m.className = 'msg err'; m.textContent = text; } }
+  function showCard(card, tag) {
+    renderScanResult(card);
+    if (tag) box.insertAdjacentHTML('afterbegin', nfcNoteHtml(tag));
+    state.cardsCache = null;
+  }
+
+  document.getElementById('nf-issue').onclick = function () {
+    var btn = this;
+    setBtnLoading(btn, 'Оформляем…');
+    apiPost('issueNfcCard', {
+      username: state.user.username, uid: uid,
+      name: document.getElementById('nf-name').value.trim(),
+      phone: document.getElementById('nf-phone').value.trim(),
+      months: document.getElementById('nf-months').value
+    }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { toast('Карта выдана и привязана к метке'); showCard(res.card, res.tag); }
+      else fail(res.error);
+    }).catch(function () { clearBtnLoading(btn); fail('Нет связи с сервером — карта не создана. Приложите метку ещё раз, когда появится связь.'); });
+  };
+
+  document.getElementById('nf-link').onclick = function () {
+    var btn = this;
+    var cardId = document.getElementById('nf-card').value.trim();
+    if (!cardId) { fail('Укажите номер карты'); return; }
+    setBtnLoading(btn, 'Привязываем…');
+    apiPost('addNfcTag', { username: state.user.username, uid: uid, cardId: cardId, label: '' }).then(function (res) {
+      if (!res.success) { clearBtnLoading(btn); fail(res.error); return; }
+      toast('Метка привязана к карте ' + res.tag.cardId);
+      return apiGet('getCardInfo', { id: res.tag.cardId }).then(function (card) { showCard(card, res.tag); });
+    }).catch(function () { clearBtnLoading(btn); fail('Нет связи с сервером'); });
+  };
+}
+
+// ---- Привязка метки: общие элементы ввода UID (используются в нескольких окнах) ----
+function nfcCaptureHtml(p) {
+  return '<label>Номер метки (UID)</label>' +
+    '<div style="display:flex; gap:8px;">' +
+      '<input id="' + p + '-uid" class="mono" placeholder="Приложите карту…" autocomplete="off" autocapitalize="off" spellcheck="false" style="flex:1; min-width:0;">' +
+      (nfcSupported() ? '<button class="btn-secondary" id="' + p + '-phone" style="white-space:nowrap; margin:0;">Телефон</button>' : '') +
+    '</div>' +
+    '<p class="sub" id="' + p + '-hint" style="margin:6px 0 0; font-size:12.5px;">Поле уже активно: USB-считыватель сам введёт номер' + (nfcSupported() ? ', либо нажмите «Телефон»' : '') + '. Можно ввести номер вручную.</p>';
+}
+
+function wireNfcCapture(p, onEnter) {
+  var inp = document.getElementById(p + '-uid');
+  var hint = document.getElementById(p + '-hint');
+  if (!inp) return;
+  var coarse = false;
+  try { coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches; } catch (e) {}
+  if (!coarse) setTimeout(function () { inp.focus(); }, 60); // на телефоне не вызываем клавиатуру сами
+  inp.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); if (onEnter) onEnter(); }
+  });
+  var phoneBtn = document.getElementById(p + '-phone');
+  if (!phoneBtn) return;
+  function setHint(text, isErr) { if (hint) { hint.textContent = text; hint.className = 'sub' + (isErr ? ' msg err' : ''); hint.style.margin = '6px 0 0'; } }
+  phoneBtn.onclick = function () {
+    if (state.nfc.owner === 'modal' && state.nfc.abort) { nfcPhoneStop(false); return; }
+    var ok = nfcPhoneStart(function (uid) {
+      inp.value = String(uid).toUpperCase();
+      try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
+      nfcPhoneStop(false);
+      setHint('Метка считана: ' + inp.value, false);
+    }, setHint, 'modal', function () { var b = document.getElementById(p + '-phone'); if (b) b.textContent = 'Телефон'; });
+    if (ok) phoneBtn.textContent = 'Стоп';
+  };
+}
+
+// ---- Метки одной карты ----
+function tagRowHtml(tag, withCard, idx) {
+  var blocked = tag.status === 'blocked';
+  return '<div class="citem">' +
+    '<div class="who">' +
+      '<div class="nm">' + esc(tag.label || 'Без названия') + '</div>' +
+      '<div class="cid">' + esc(tag.uid) + '</div>' +
+      '<div class="meta">' + (withCard ? esc(tag.cardName || 'Без имени') + ' · ' + esc(tag.cardId) + '<br>' : '') +
+        'считываний: ' + tag.scans + (tag.lastScan ? ' · последнее ' + esc(tag.lastScan) : '') + '</div>' +
+    '</div>' +
+    '<div class="right">' +
+      '<span class="badge ' + (blocked ? 's-expired' : 's-active') + '">' + (blocked ? 'Заблокирована' : 'Активна') + '</span>' +
+      '<span class="icon-btn" title="Настроить метку" data-ti="' + idx + '">' + ICON.edit + '</span>' +
+    '</div>' +
+  '</div>';
+}
+
+function tagListHtml(tags, withCard, emptyText) {
+  if (!tags || !tags.length) return '<p class="sub" style="margin:0;">' + esc(emptyText) + '</p>';
+  return tags.map(function (t, i) { return tagRowHtml(t, withCard, i); }).join('');
+}
+
+function wireTagRows(bodyId, tags, onDone, onBack) {
+  var body = document.getElementById(bodyId);
+  if (!body) return;
+  var btns = body.querySelectorAll('[data-ti]');
+  Array.prototype.forEach.call(btns, function (b) {
+    b.onclick = function () { showNfcTagModal(tags[Number(b.getAttribute('data-ti'))], onDone, onBack); };
+  });
+}
+
+function showCardNfcModal(cardId) {
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>NFC-метки карты</h2>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(cardId) + '</p>' +
+    '<div class="clist" id="cn-list" style="margin-top:14px;">' + skeletonRows(2) + '</div>' +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:18px 0 6px;">' +
+    '<h3 style="margin:10px 0 0;">Привязать новую метку</h3>' +
+    '<label>Название (необязательно)</label><input id="cn-label" maxlength="60" placeholder="Например: основная, брелок">' +
+    nfcCaptureHtml('cn') +
+    '<button class="btn-primary" id="cn-add">Привязать метку</button>' +
+    '<div id="cn-msg" class="msg"></div>'
+  );
+
+  function reopen() { showCardNfcModal(cardId); }
+  function loadTags() {
+    apiGet('listNfcTags', { id: cardId }).then(function (tags) {
+      var list = document.getElementById('cn-list');
+      if (!list) return;
+      if (!tags || tags.error) { list.innerHTML = '<p class="msg err" style="margin:0;">Не удалось загрузить метки' + (tags && tags.error ? ': ' + esc(tags.error) : '') + '</p>'; return; }
+      list.innerHTML = tagListHtml(tags, false, 'К этой карте пока не привязано ни одной NFC-метки.');
+      wireTagRows('cn-list', tags, reopen, reopen);
+    }).catch(function () {
+      var list = document.getElementById('cn-list');
+      if (list) list.innerHTML = '<p class="msg err" style="margin:0;">Нет связи с сервером</p>';
+    });
+  }
+  loadTags();
+
+  function addTag() {
+    var btn = document.getElementById('cn-add');
+    var msg = document.getElementById('cn-msg');
+    var uid = document.getElementById('cn-uid').value.trim();
+    if (!uid) { msg.className = 'msg err'; msg.textContent = 'Приложите карту к считывателю или введите номер метки'; return; }
+    setBtnLoading(btn, 'Привязываем…');
+    apiPost('addNfcTag', { username: state.user.username, uid: uid, cardId: cardId, label: document.getElementById('cn-label').value.trim() }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) {
+        toast('Метка привязана');
+        document.getElementById('cn-uid').value = '';
+        document.getElementById('cn-label').value = '';
+        msg.className = 'msg'; msg.textContent = '';
+        loadTags();
+        var inp = document.getElementById('cn-uid'); if (inp) inp.focus();
+      } else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  }
+  document.getElementById('cn-add').onclick = addTag;
+  wireNfcCapture('cn', addTag);
+}
+
+/** Настройки одной метки: название, блокировка, перенос на другую карту и удаление (админ), запись ссылки на метку (Android) */
+function showNfcTagModal(tag, onDone, onBack) {
+  var isAdmin = state.user.role === 'admin';
+  var blocked = tag.status === 'blocked';
+  var done = onDone || closeModal;
+  var back = onBack || closeModal;
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>NFC-метка</h2>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(tag.uid) + '</p>' +
+    '<p class="sub" style="margin:8px 0 0;">Карта: ' + (tag.cardName ? esc(tag.cardName) + ' · ' : '') + esc(tag.cardId) + '</p>' +
+    '<label>Название</label><input id="nt-label" maxlength="60" value="' + esc(tag.label) + '" placeholder="Например: основная, брелок">' +
+    (isAdmin ? '<label>Привязана к карте</label><input id="nt-card" class="mono" value="' + esc(tag.cardId) + '">' : '') +
+    '<button class="btn-primary" id="nt-save">Сохранить</button>' +
+    '<div class="row-btns" style="margin-top:10px;">' +
+      '<button class="' + (blocked ? 'btn-secondary' : 'btn-danger') + '" id="nt-block">' + (blocked ? 'Разблокировать' : 'Заблокировать') + '</button>' +
+      (isAdmin ? '<button class="btn-danger" id="nt-del">Удалить метку</button>' : '') +
+    '</div>' +
+    (nfcSupported()
+      ? '<button class="btn-ghost" id="nt-write" style="width:100%; margin-top:10px;">Записать на метку ссылку для клиента</button>' +
+        '<p class="sub" style="margin:6px 0 0; font-size:12.5px;">Клиент поднесёт карту к своему телефону — откроется страница со статусом подписки. Запись заменит содержимое метки.</p>'
+      : '') +
+    '<button class="btn-ghost" id="nt-back" style="width:100%; margin-top:10px;">Назад</button>' +
+    '<div id="nt-msg" class="msg"></div>'
+  );
+  function msg(text, ok) { var m = document.getElementById('nt-msg'); if (m) { m.className = 'msg ' + (ok ? 'ok' : 'err'); m.textContent = text; } }
+  function send(payload, btn, busy, okText) {
+    setBtnLoading(btn, busy);
+    var data = { actorRole: state.user.role, username: state.user.username, uid: tag.uid };
+    for (var k in payload) data[k] = payload[k];
+    apiPost('updateNfcTag', data).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { toast(okText); done(); } else msg(res.error);
+    }).catch(function () { clearBtnLoading(btn); msg('Нет связи с сервером'); });
+  }
+  document.getElementById('nt-back').onclick = back;
+  document.getElementById('nt-save').onclick = function () {
+    var payload = { label: document.getElementById('nt-label').value.trim() };
+    var cardEl = document.getElementById('nt-card');
+    if (cardEl) payload.cardId = cardEl.value.trim();
+    send(payload, this, 'Сохраняем…', 'Сохранено');
+  };
+  document.getElementById('nt-block').onclick = function () {
+    send({ status: blocked ? 'active' : 'blocked' }, this, blocked ? 'Разблокируем…' : 'Блокируем…', blocked ? 'Метка разблокирована' : 'Метка заблокирована');
+  };
+  var delBtn = document.getElementById('nt-del');
+  if (delBtn) delBtn.onclick = function () { confirmDeleteTag(tag, done, function () { showNfcTagModal(tag, onDone, onBack); }); };
+  var wr = document.getElementById('nt-write');
+  if (wr) wr.onclick = function () {
+    var btn = this;
+    nfcPhoneStop(true);
+    var writer;
+    try { writer = new NDEFReader(); } catch (e) { msg('NFC недоступен в этом браузере'); return; }
+    setBtnLoading(btn, 'Поднесите метку к телефону…');
+    writer.write({ records: [{ recordType: 'url', data: cardLink(tag.cardId) }] }, { overwrite: true }).then(function () {
+      clearBtnLoading(btn);
+      msg('Ссылка записана на метку. Теперь клиент увидит статус подписки, поднеся её к телефону.', true);
+    }).catch(function (err) {
+      clearBtnLoading(btn);
+      msg('Не удалось записать' + (err && err.message ? ': ' + err.message : '') + '. Эта метка может не поддерживать запись (нужны карты NTAG).');
+    });
+  };
+}
+
+function confirmDeleteTag(tag, onDone, onCancel) {
+  openModal(
+    '<h2>Удалить NFC-метку?</h2>' +
+    '<p class="sub">' + esc(tag.label || 'Без названия') + ' · <span class="mono">' + esc(tag.uid) + '</span><br>Карта ' + esc(tag.cardId) + ' останется, но по этой метке её больше не найти. Метку можно привязать заново.</p>' +
+    '<div class="row-btns" style="margin-top:16px;">' +
+      '<button class="btn-ghost" id="dt-cancel">Отмена</button>' +
+      '<button class="btn-danger" id="dt-ok">Удалить</button>' +
+    '</div><div id="dt-msg" class="msg"></div>'
+  );
+  document.getElementById('dt-cancel').onclick = onCancel || closeModal;
+  document.getElementById('dt-ok').onclick = function () {
+    var btn = this;
+    setBtnLoading(btn, 'Удаляем…');
+    apiPost('deleteNfcTag', { actorRole: state.user.role, username: state.user.username, uid: tag.uid }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { toast('Метка удалена'); onDone(); }
+      else { var m = document.getElementById('dt-msg'); m.className = 'msg err'; m.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); var m = document.getElementById('dt-msg'); m.className = 'msg err'; m.textContent = 'Нет связи с сервером'; });
+  };
+}
+
+// ---- «Ещё → NFC-метки» (админ): все метки магазина и настройки считывателя ----
+function renderNfcAdminBlock() {
+  var card = document.getElementById('nfc-admin-card');
+  if (!card) return;
+  card.innerHTML =
+    '<h2>NFC-метки</h2>' +
+    '<p class="sub">NFC-карты и брелоки, привязанные к картам лояльности: добавление, блокировка потерянных, удаление. На одну карту — до 5 меток.</p>' +
+    '<button class="btn-secondary" id="na-add" style="width:100%;">+ Привязать метку</button>' +
+    '<input id="na-search" placeholder="Поиск: метка, карта или имя" style="margin-top:10px;">' +
+    '<div class="clist" id="na-body" style="margin-top:14px;">' + skeletonRows(2) + '</div>' +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:18px 0 12px;">' +
+    '<h3>Считыватель на этом устройстве</h3>' +
+    '<p class="sub" style="margin:0 0 10px;">NFC телефона: ' + (nfcSupported() ? '<b style="color:var(--brand-dark);">доступно</b>' : '<b>недоступно в этом браузере</b> (нужен Chrome на Android, сайт по HTTPS)') + '.</p>' +
+    '<label style="display:flex; align-items:center; gap:10px; margin:0; font-size:14px; color:var(--ink); cursor:pointer;">' +
+      '<input type="checkbox" id="na-usbauto" style="width:auto; flex:none;">' +
+      '<span>USB-модуль без клавиши Enter: завершать ввод по паузе</span>' +
+    '</label>' +
+    '<p class="sub" style="margin:6px 0 0; font-size:12.5px;">Включено по умолчанию. Большинство модулей присылают номер и Enter сами — тогда настройка ни на что не влияет.</p>';
+  var chk = document.getElementById('na-usbauto');
+  chk.checked = usbAutoSubmit();
+  chk.onchange = function () { setUsbAutoSubmit(chk.checked); toast(chk.checked ? 'Автозавершение ввода включено' : 'Автозавершение ввода выключено'); };
+  document.getElementById('na-add').onclick = function () { showNfcAddModal(); };
+  document.getElementById('na-search').addEventListener('input', debounce(refreshNfcAdmin, 250));
+  refreshNfcAdmin();
+}
+
+function refreshNfcAdmin() {
+  var qEl = document.getElementById('na-search');
+  var q = qEl ? qEl.value : '';
+  apiGet('listNfcTags', { q: q }).then(function (tags) {
+    var body = document.getElementById('na-body');
+    if (!body) return;
+    if (!tags || tags.error) { body.innerHTML = '<p class="msg err" style="margin:0;">Не удалось загрузить метки' + (tags && tags.error ? ': ' + esc(tags.error) : '') + '</p>'; return; }
+    state.nfcTags = tags;
+    body.innerHTML = tagListHtml(tags, true, q ? 'Ничего не найдено.' : 'Пока нет ни одной NFC-метки — привяжите первую кнопкой выше.');
+    var after = function () { closeModal(); refreshNfcAdmin(); };
+    wireTagRows('na-body', tags, after, closeModal);
+  }).catch(function () {
+    var body = document.getElementById('na-body');
+    if (body && !state.nfcTags.length) body.innerHTML = '<p class="msg err" style="margin:0;">Нет связи с сервером</p>';
+  });
+}
+
+function showNfcAddModal() {
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>Привязать NFC-метку</h2>' +
+    '<label>Номер карты лояльности</label><input id="nm-card" class="mono" placeholder="LC-000123">' +
+    '<label>Название (необязательно)</label><input id="nm-label" maxlength="60" placeholder="Например: основная, брелок">' +
+    nfcCaptureHtml('nm') +
+    '<button class="btn-primary" id="nm-add">Привязать метку</button>' +
+    '<div id="nm-msg" class="msg"></div>'
+  );
+  var cardEl = document.getElementById('nm-card');
+  function addTag() {
+    var btn = document.getElementById('nm-add');
+    var msg = document.getElementById('nm-msg');
+    var cardId = cardEl.value.trim();
+    var uid = document.getElementById('nm-uid').value.trim();
+    if (!cardId) { msg.className = 'msg err'; msg.textContent = 'Укажите номер карты'; cardEl.focus(); return; }
+    if (!uid) { msg.className = 'msg err'; msg.textContent = 'Приложите карту к считывателю или введите номер метки'; return; }
+    setBtnLoading(btn, 'Привязываем…');
+    apiPost('addNfcTag', { username: state.user.username, uid: uid, cardId: cardId, label: document.getElementById('nm-label').value.trim() }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { closeModal(); toast('Метка привязана к карте ' + res.tag.cardId); refreshNfcAdmin(); }
+      else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  }
+  document.getElementById('nm-add').onclick = addTag;
+  wireNfcCapture('nm', function () { if (!cardEl.value.trim()) cardEl.focus(); else addTag(); });
+  // сначала нужен номер карты — фокус в него, а не в поле UID
+  setTimeout(function () { cardEl.focus(); }, 80);
+}
+
+// ============================ ИСТОРИЯ КАРТЫ И ЖУРНАЛ СОБЫТИЙ ============================
+var HIST_TYPES = {
+  reserve:     { t: 'Напечатана партией', c: 'info' },
+  create:      { t: 'Карта создана', c: 'ok' },
+  activate:    { t: 'Выдана клиенту', c: 'ok' },
+  renew:       { t: 'Подписка продлена', c: 'ok' },
+  update:      { t: 'Данные изменены', c: 'info' },
+  delete:      { t: 'Карта удалена', c: 'bad' },
+  scan_qr:     { t: 'Отсканирован QR-код', c: '' },
+  scan_manual: { t: 'Открыта по номеру', c: '' },
+  scan_nfc:    { t: 'Приложена NFC-карта', c: 'ok' },
+  nfc_denied:  { t: 'Заблокированная NFC-метка', c: 'bad' },
+  nfc_add:     { t: 'NFC-метка привязана', c: 'ok' },
+  nfc_remove:  { t: 'NFC-метка удалена', c: 'bad' },
+  nfc_block:   { t: 'NFC-метка заблокирована', c: 'warn' },
+  nfc_unblock: { t: 'NFC-метка разблокирована', c: 'ok' },
+  nfc_update:  { t: 'NFC-метка изменена', c: 'info' },
+  nfc_move:    { t: 'NFC-метка перепривязана', c: 'info' },
+  note:        { t: 'Заметка сотрудника', c: 'warn' }
+};
+var HIST_FILTERS = [['all', 'Все'], ['visits', 'Сканирования'], ['changes', 'Изменения'], ['nfc', 'NFC']];
+
+function histMatch(type, f) {
+  type = String(type || '');
+  if (f === 'all') return true;
+  if (f === 'visits') return type.indexOf('scan_') === 0 || type === 'nfc_denied';
+  if (f === 'nfc') return type.indexOf('nfc_') === 0 || type === 'scan_nfc';
+  return type.indexOf('scan_') !== 0 && type.indexOf('nfc_') !== 0; // «Изменения»: выдача, продления, правки, заметки
+}
+
+function histChipsHtml(active) {
+  return HIST_FILTERS.map(function (f) {
+    return '<button type="button" class="chip' + (f[0] === active ? ' on' : '') + '" data-f="' + f[0] + '" style="padding:6px 12px; border-radius:100px;">' + f[1] + '</button>';
+  }).join('');
+}
+
+function histItemHtml(it, showCard) {
+  var meta = HIST_TYPES[it.type] || { t: it.type || 'Событие', c: 'info' };
+  var hideDetails = it.type === 'scan_qr' || it.type === 'scan_manual';
+  var who = it.cardName || it.cardId;
+  return '<div class="hist-item"><span class="hist-dot ' + meta.c + '"></span><div style="min-width:0; flex:1;">' +
+    '<div class="hist-title">' + esc(meta.t) + (showCard && who ? ' <span class="hist-card">· ' + esc(who) + '</span>' : '') + '</div>' +
+    (it.details && !hideDetails ? '<div class="hist-det">' + esc(it.details) + '</div>' : '') +
+    '<div class="hist-meta">' + esc(it.time) + (it.user ? ' · ' + esc(it.user) : '') + (showCard && it.cardName && it.cardId ? ' · ' + esc(it.cardId) : '') + '</div>' +
+  '</div></div>';
+}
+
+/** Рисует список событий с учётом фильтра в блоке bodyId и подключает фильтры-«чипсы» chipsId */
+function renderHistView(st, bodyId, chipsId, showCard, emptyText) {
+  var chips = document.getElementById(chipsId);
+  if (chips) {
+    chips.innerHTML = histChipsHtml(st.filter);
+    Array.prototype.forEach.call(chips.querySelectorAll('[data-f]'), function (b) {
+      b.onclick = function () { st.filter = b.getAttribute('data-f'); renderHistView(st, bodyId, chipsId, showCard, emptyText); };
+    });
+  }
+  var body = document.getElementById(bodyId);
+  if (!body) return;
+  var shown = st.items.filter(function (it) { return histMatch(it.type, st.filter); });
+  body.innerHTML = shown.length ? shown.map(function (it) { return histItemHtml(it, showCard); }).join('') :
+    '<p class="sub" style="margin:8px 0 0;">' + esc(emptyText) + '</p>';
+}
+
+var HIST_EMPTY = 'Записей пока нет. История ведётся с момента обновления системы — прежние события здесь не отображаются.';
+
+function showHistoryModal(cardId) {
+  openModal(
+    '<button class="modal-x" onclick="closeModal()">✕</button>' +
+    '<h2>История карты</h2>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(cardId) + '</p>' +
+    '<div style="display:flex; gap:8px; margin-top:12px;">' +
+      '<input id="hs-note" maxlength="500" placeholder="Заметка в историю…" style="flex:1; min-width:0;">' +
+      '<button class="btn-secondary" id="hs-add" style="white-space:nowrap; margin:0;">Добавить</button>' +
+    '</div>' +
+    '<div id="hs-msg" class="msg hidden"></div>' +
+    '<div class="chips" id="hs-chips"></div>' +
+    '<div class="hist" id="hs-body">' + skeletonRows(3) + '</div>'
+  );
+  var st = { items: [], filter: 'all' };
+  state.hist = st;
+
+  function load() {
+    apiGet('getHistory', { id: cardId, limit: 300, role: state.user.role }).then(function (res) {
+      if (state.hist !== st) return; // окно уже закрыто или открыто для другой карты
+      var body = document.getElementById('hs-body');
+      if (!body) return;
+      if (!res || res.error) { body.innerHTML = '<p class="msg err" style="margin:0;">Не удалось загрузить историю' + (res && res.error ? ': ' + esc(res.error) : '') + '</p>'; return; }
+      st.items = res.items || [];
+      renderHistView(st, 'hs-body', 'hs-chips', false, HIST_EMPTY);
+    }).catch(function () {
+      var body = document.getElementById('hs-body');
+      if (body && state.hist === st) body.innerHTML = '<p class="msg err" style="margin:0;">Нет связи с сервером — история недоступна.</p>';
+    });
+  }
+  load();
+
+  function addNote() {
+    var inp = document.getElementById('hs-note');
+    var msg = document.getElementById('hs-msg');
+    var btn = document.getElementById('hs-add');
+    var text = inp.value.trim();
+    if (!text) return;
+    setBtnLoading(btn, 'Сохраняем…');
+    apiPost('logCardEvent', { username: state.user.username, cardId: cardId, type: 'note', details: text }).then(function (res) {
+      clearBtnLoading(btn);
+      if (res.success) { inp.value = ''; msg.classList.add('hidden'); toast('Заметка добавлена'); load(); }
+      else { msg.className = 'msg err'; msg.textContent = res.error; }
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  }
+  document.getElementById('hs-add').onclick = addNote;
+  document.getElementById('hs-note').addEventListener('keydown', function (e) { if (e.key === 'Enter') addNote(); });
+}
+
+// ---- «Ещё → Журнал событий» (админ): последние события по всем картам ----
+function renderJournalBlock() {
+  var card = document.getElementById('journal-card');
+  if (!card) return;
+  var st = { items: [], filter: 'all' };
+  state.journal = st;
+  card.innerHTML =
+    '<h2>Журнал событий</h2>' +
+    '<p class="sub" style="margin-bottom:0;">Последние действия по всем картам: выдача, продления, правки, сканирования, NFC. Кто и когда это сделал.</p>' +
+    '<div class="chips" id="jr-chips"></div>' +
+    '<div class="hist" id="jr-body">' + skeletonRows(3) + '</div>' +
+    '<button class="btn-ghost" id="jr-refresh" style="width:100%; margin-top:10px;">Обновить</button>';
+  function load() {
+    var btn = document.getElementById('jr-refresh');
+    setBtnLoading(btn, 'Обновляем…');
+    apiGet('getHistory', { id: '', limit: 150, role: state.user.role }).then(function (res) {
+      clearBtnLoading(btn);
+      var body = document.getElementById('jr-body');
+      if (!body || state.journal !== st) return;
+      if (!res || res.error) { body.innerHTML = '<p class="msg err" style="margin:0;">Не удалось загрузить журнал' + (res && res.error ? ': ' + esc(res.error) : '') + '</p>'; return; }
+      st.items = res.items || [];
+      renderHistView(st, 'jr-body', 'jr-chips', true, HIST_EMPTY);
+    }).catch(function () {
+      clearBtnLoading(btn);
+      var body = document.getElementById('jr-body');
+      if (body && state.journal === st) body.innerHTML = '<p class="msg err" style="margin:0;">Нет связи с сервером</p>';
+    });
+  }
+  document.getElementById('jr-refresh').onclick = load;
+  load();
+}
+
 // ============================ УТИЛИТЫ ============================
 function openModal(html) {
   closeModal();
@@ -3291,7 +4062,10 @@ function openModal(html) {
   ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(); });
   document.body.appendChild(ov);
 }
-function closeModal() { var ov = document.getElementById('overlay'); if (ov) ov.remove(); }
+function closeModal() {
+  if (state.nfc && state.nfc.owner === 'modal') nfcPhoneStop(false); // окно закрыто — телефонное NFC-чтение из него больше не нужно
+  var ov = document.getElementById('overlay'); if (ov) ov.remove();
+}
 
 function toast(text) {
   var t = document.createElement('div');
