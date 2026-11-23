@@ -217,6 +217,7 @@
     #view > .card, #view > #scan-result { margin-bottom: 0; }
     #view > .stats { grid-column: 1 / -1; margin-bottom: 0; }
     #view[data-view="list"], #view[data-view="print"] { grid-template-columns: minmax(0, 1fr); max-width: 980px; }
+    #view[data-view="new"] { grid-template-columns: minmax(0, 1fr); max-width: 720px; }
     .modal { max-width: 480px; }
     .stat { padding: 16px 8px; } .stat .n { font-size: 26px; } .stat .l { font-size: 12px; }
     .btn-primary:hover, .btn-secondary:hover, .btn-ghost:hover { filter: brightness(.97); }
@@ -224,6 +225,21 @@
   }
   @media (min-width: 1500px) { #view { grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); } }
   @media print { #view { display: block !important; } .wrap { margin: 0 !important; } }
+
+  /* экран входа: строго по центру и на компьютере, и на телефоне (не зависит от бокового меню) */
+  .login-wrap { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; box-sizing: border-box; }
+  .login-wrap > .card { width: 100%; max-width: 420px; margin: 0; }
+  @media (min-width: 700px) { .login-wrap > .card { padding: 28px 30px; } }
+
+  /* логины и пароли */
+  .cred-row { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background: #fff; }
+  .cred-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cred-head .nm { font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+  .cred-line { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 14px; }
+  .cred-line .k { color: var(--muted); width: 58px; flex: none; }
+  .cred-line .v { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; font-weight: 600; }
+  .cred-line .v.off { color: var(--muted); font-family: inherit; font-weight: 400; }
+  .cred-line button { flex: none; margin: 0; padding: 6px 10px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -2161,7 +2177,7 @@ function renderLogin() {
   var warn = (!API_BASE_URL || API_BASE_URL.indexOf('ВСТАВЬТЕ') !== -1)
     ? '<div class="banner">Не указан адрес API. Откройте index.html и впишите ссылку Apps Script (/exec) в переменную API_BASE_URL.</div>' : '';
   root.innerHTML =
-    '<div class="wrap" style="padding-top:56px; max-width:420px;">' +
+    '<div class="login-wrap">' +
       '<div class="card">' +
         '<div class="brandmark" style="margin-bottom:18px; font-size:18px;">' + ICON.leaf + 'Карты лояльности</div>' +
         warn +
@@ -2896,6 +2912,13 @@ function viewNew(v) {
       '<p class="sub">Если номер уже существует и лежит на карте из коробки — не создавайте новую здесь, а отсканируйте её. Форма для заполнения данных клиента откроется сразу.</p>' +
       '<button class="btn-secondary" style="width:100%;" id="nw-scan-btn">Сканировать QR карты</button>' +
     '</div>' +
+    '<div class="card" id="nn-card">' +
+      '<h2>Карта по NFC-метке</h2>' +
+      '<p class="sub">Приложите NFC-карту или брелок к считывателю. Если метка новая — откроется форма выдачи карты с этой меткой. Если метка уже привязана — покажем её карту (администратор может перенести метку на другую карту).</p>' +
+      nfcCaptureHtml('nn') +
+      '<button class="btn-secondary" id="nn-go" style="width:100%; margin-top:12px;">Проверить метку</button>' +
+      '<div id="nn-box"></div>' +
+    '</div>' +
     '<div class="card">' +
       '<h2>Новая карта</h2>' +
       '<p class="sub">А это — для номера, которого ещё нет в системе совсем (не из напечатанной партии).</p>' +
@@ -2914,6 +2937,8 @@ function viewNew(v) {
       '<div id="nw-done" class="hidden" style="text-align:center; margin-top:20px; border-top:1px solid var(--line); padding-top:18px;"></div>' +
     '</div>';
   document.getElementById('nw-scan-btn').onclick = goScanAndStart;
+  document.getElementById('nn-go').onclick = function () { nnCheck(true); };
+  wireNfcCapture('nn', function () { nnCheck(false); }, true);
   document.getElementById('nw-gen').onclick = function () {
     apiGet('generateCardId', {}).then(function (id) { document.getElementById('nw-id').value = id; });
   };
@@ -2942,6 +2967,161 @@ function viewNew(v) {
         '<button class="btn-ghost" onclick="go(\'new\')">Ещё одна</button></div>';
     }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
   };
+}
+
+// ---- «Новая → Карта по NFC-метке»: выдать карту на метку или найти карту, к которой метка уже привязана ----
+var nnSeq = 0, nnLastKey = '', nnLastAt = 0;
+
+function nnMsg(text, isErr) { return '<p class="msg' + (isErr ? ' err' : '') + '" style="margin:12px 0 0;">' + esc(text) + '</p>'; }
+
+function nnCheck(force) {
+  var inp = document.getElementById('nn-uid');
+  var box = document.getElementById('nn-box');
+  if (!inp || !box) return;
+  var raw = inp.value.trim();
+  if (!raw) { box.innerHTML = nnMsg('Приложите карту к считывателю или введите номер метки', true); return; }
+  var key = raw.replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+  var now = Date.now();
+  if (!force && key === nnLastKey && now - nnLastAt < 2500) return; // метка лежит на считывателе — не обрабатываем по кругу
+  nnLastKey = key; nnLastAt = now;
+  var seq = ++nnSeq;
+  box.innerHTML = '<div style="margin-top:12px;"><div class="skel skel-row" style="margin:0 0 8px;"></div><div class="skel skel-row" style="margin:0;"></div></div>';
+  try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
+  apiGet('getCardByNfc', { uid: raw }).then(function (res) {
+    if (seq !== nnSeq || !document.getElementById('nn-box')) return;
+    if (!res || res.error) { box.innerHTML = nnMsg((res && res.error) || 'Не удалось проверить метку', true); return; }
+    if (!res.found) { nnIssueForm(res.uid || raw); return; }
+    nnLinked(res);
+  }).catch(function () {
+    if (seq !== nnSeq) return;
+    box.innerHTML = nnMsg('Нет связи с сервером — метку не удалось проверить. Приложите карту ещё раз.', true);
+  });
+}
+
+/** Метка свободна: оформляем новую карту сразу с ней или привязываем метку к уже существующей карте */
+function nnIssueForm(uid) {
+  var box = document.getElementById('nn-box'); if (!box) return;
+  box.innerHTML =
+    '<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center;"><h3 style="margin:0;">Метка свободна</h3><span class="badge s-no_data">Новая</span></div>' +
+      '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(uid) + '</p>' +
+      '<label>Имя клиента</label><input id="nn-name">' +
+      '<label>Телефон</label><input id="nn-phone" inputmode="tel" placeholder="+7…">' +
+      '<label>Срок подписки</label><select id="nn-months">' + monthOptionsHtml() + '</select>' +
+      '<label>Заметки</label><input id="nn-notes">' +
+      '<button class="btn-primary" id="nn-issue">Выдать карту с этой меткой</button>' +
+      '<hr style="border:none; border-top:1px solid var(--line); margin:16px 0 4px;">' +
+      '<label>…или привязать метку к уже существующей карте</label>' +
+      '<div style="display:flex; gap:8px;"><input id="nn-card-id" placeholder="LC-000123" style="flex:1;">' +
+      '<button class="btn-secondary" id="nn-link" style="white-space:nowrap; margin:0;">Привязать</button></div>' +
+      '<div id="nn-err" class="msg"></div>' +
+    '</div>';
+  function fail(text) { var m = document.getElementById('nn-err'); if (m) { m.className = 'msg err'; m.textContent = text; } }
+  document.getElementById('nn-issue').onclick = function () {
+    var btn = this;
+    setBtnLoading(btn, 'Оформляем…');
+    apiPost('issueNfcCard', {
+      username: state.user.username, uid: uid,
+      name: document.getElementById('nn-name').value.trim(),
+      phone: document.getElementById('nn-phone').value.trim(),
+      months: document.getElementById('nn-months').value,
+      notes: document.getElementById('nn-notes').value.trim()
+    }).then(function (res) {
+      clearBtnLoading(btn);
+      if (!res.success) { fail(res.error); return; }
+      toast('Карта выдана и привязана к метке');
+      state.cardsCache = null;
+      nnDone(res.card, 'Карта выдана');
+    }).catch(function () { clearBtnLoading(btn); fail('Нет связи с сервером — карта не создана. Приложите метку ещё раз, когда появится связь.'); });
+  };
+  document.getElementById('nn-link').onclick = function () {
+    var btn = this;
+    var cardId = document.getElementById('nn-card-id').value.trim();
+    if (!cardId) { fail('Укажите номер карты'); return; }
+    setBtnLoading(btn, 'Привязываем…');
+    apiPost('addNfcTag', { username: state.user.username, uid: uid, cardId: cardId, label: '' }).then(function (res) {
+      if (!res.success) { clearBtnLoading(btn); fail(res.error); return; }
+      toast('Метка привязана к карте ' + res.tag.cardId);
+      state.cardsCache = null;
+      return apiGet('getCardInfo', { id: res.tag.cardId }).then(function (card) { nnDone(card, 'Метка привязана'); });
+    }).catch(function () { clearBtnLoading(btn); fail('Нет связи с сервером'); });
+  };
+}
+
+function nnCardSummary(card) {
+  var tel = card.phone ? esc(card.phone) : '—';
+  return '<h3 style="margin:0;">' + esc(card.name || 'Без имени') + '</h3>' +
+    '<p class="cid mono" style="color:var(--muted); font-size:12px; margin:2px 0 0;">' + esc(card.id) + '</p>' +
+    '<dl class="kv">' +
+      '<dt>Телефон</dt><dd>' + tel + '</dd>' +
+      '<dt>Действует до</dt><dd>' + (card.endDate ? esc(card.endDate) : 'ещё не оформлена') + '</dd>' +
+    '</dl>';
+}
+
+function nnActionsHtml(cardId) {
+  return '<div class="row-btns" style="margin-top:12px;">' +
+      '<button class="btn-ghost" onclick="showHistoryModal(\'' + esc(cardId) + '\')">История карты</button>' +
+      '<button class="btn-ghost" onclick="showCardNfcModal(\'' + esc(cardId) + '\')">NFC-метки</button>' +
+    '</div>' +
+    '<div class="row-btns" style="margin-top:8px;">' +
+      '<button class="btn-secondary" onclick="openCardInScanner(\'' + esc(cardId) + '\')">Открыть в сканере</button>' +
+      '<button class="btn-ghost" onclick="go(\'new\')">Ещё одна</button>' +
+    '</div>';
+}
+
+function nnDone(card, title) {
+  var box = document.getElementById('nn-box'); if (!box) return;
+  var inp = document.getElementById('nn-uid'); if (inp) inp.value = '';
+  nnLastKey = ''; // следующая метка (или эта же) снова обрабатывается
+  if (!card || !card.found) { box.innerHTML = nnMsg(title + '.', false); return; }
+  box.innerHTML = '<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;">' +
+    '<p style="font-weight:700; margin:0 0 8px; color:var(--brand-dark);">' + esc(title) + '</p>' + nnCardSummary(card) + nnActionsHtml(card.id) + '</div>';
+}
+
+/** Метка уже привязана: показываем карту; админ может перенести метку на другую карту */
+function nnLinked(res) {
+  var box = document.getElementById('nn-box'); if (!box) return;
+  var tag = res.tag, card = res.card;
+  var isAdmin = state.user.role === 'admin';
+  if (!card || !card.found) {
+    box.innerHTML = '<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"><h3 style="margin:0;">Карта метки не найдена</h3>' +
+      '<p class="sub" style="margin:6px 0 0;">Метка <span class="mono">' + esc(tag.uid) + '</span> привязана к карте ' + esc(tag.cardId) + ', но этой карты уже нет в базе.' +
+      (isAdmin ? ' Удалите метку в «Ещё → NFC-метки», чтобы привязать её заново.' : ' Сообщите администратору.') + '</p></div>';
+    return;
+  }
+  var blocked = tag.status === 'blocked';
+  box.innerHTML = '<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;">' +
+    '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;"><h3 style="margin:0;">Метка уже привязана</h3>' +
+      '<span class="badge ' + (blocked ? 's-expired' : 's-active') + '">' + (blocked ? 'Заблокирована' : 'Активна') + '</span></div>' +
+    '<p class="sub" style="margin:4px 0 10px;">Новую карту на эту метку не оформить — она уже принадлежит карте:</p>' +
+    nnCardSummary(card) + nnActionsHtml(card.id) +
+    '<hr style="border:none; border-top:1px solid var(--line); margin:16px 0 4px;">' +
+    (isAdmin
+      ? '<label>Перенести метку на другую карту</label>' +
+        '<div style="display:flex; gap:8px;"><input id="nn-move-id" placeholder="LC-000123" style="flex:1;">' +
+        '<button class="btn-secondary" id="nn-move" style="white-space:nowrap; margin:0;">Перенести</button></div>'
+      : '<p class="sub" style="margin:8px 0 0; font-size:12.5px;">Перенести метку на другую карту может администратор.</p>') +
+    '<div id="nn-err" class="msg"></div></div>';
+  var mv = document.getElementById('nn-move');
+  if (mv) mv.onclick = function () {
+    var btn = this;
+    var target = document.getElementById('nn-move-id').value.trim();
+    var m = document.getElementById('nn-err');
+    if (!target) { m.className = 'msg err'; m.textContent = 'Укажите номер карты, на которую перенести метку'; return; }
+    setBtnLoading(btn, 'Переносим…');
+    apiPost('updateNfcTag', { actorRole: state.user.role, username: state.user.username, uid: tag.uid, cardId: target }).then(function (r) {
+      clearBtnLoading(btn);
+      if (r.success) { toast('Метка перенесена'); state.cardsCache = null; nnCheck(true); }
+      else { m.className = 'msg err'; m.textContent = r.error; }
+    }).catch(function () { clearBtnLoading(btn); m.className = 'msg err'; m.textContent = 'Нет связи с сервером'; });
+  };
+}
+
+/** Открыть карту на вкладке «Сканер» без записи в историю (это не сканирование, а просмотр) */
+function openCardInScanner(id) {
+  go('scan');
+  scanLoading();
+  apiGet('getCardInfo', { id: id }).then(function (card) { renderScanResult(card); }).catch(function () { toast('Нет связи с сервером'); });
 }
 
 // ============================ ВКЛАДКА: ПЕЧАТЬ QR ПАКЕТОМ ============================
@@ -3086,6 +3266,151 @@ function confirmDeleteUser(usr, rowEl) {
   };
 }
 
+// ---- «Ещё → Логины и пароли» (админ) ----
+// Пароль администратора проверяется на сервере при каждом открытии списка; в браузере он живёт только пока открыто окно.
+var credSession = null; // { pass, users }
+var credKeep = false;   // true на время перехода между окнами списка/правки, чтобы closeModal не сбросил сессию
+
+function credClear() { credSession = null; credKeep = false; }
+
+function showCredAuth() {
+  openModal(
+    '<button class="modal-x" onclick="credClear(); closeModal()">✕</button>' +
+    '<h2>Логины и пароли</h2>' +
+    '<p class="sub">Введите свой пароль администратора, чтобы открыть список.</p>' +
+    '<label>Ваш пароль</label><input id="cr-pass" type="password" autocomplete="current-password">' +
+    '<button class="btn-primary" id="cr-go">Показать</button>' +
+    '<div id="cr-msg" class="msg"></div>'
+  );
+  var inp = document.getElementById('cr-pass');
+  setTimeout(function () { inp.focus(); }, 60);
+  function go() {
+    var btn = document.getElementById('cr-go');
+    var msg = document.getElementById('cr-msg');
+    var pass = inp.value;
+    if (!pass) { msg.className = 'msg err'; msg.textContent = 'Введите пароль'; return; }
+    setBtnLoading(btn, 'Проверяем…');
+    apiPost('listCredentials', { username: state.user.username, password: pass }).then(function (res) {
+      clearBtnLoading(btn);
+      if (!res.success) { msg.className = 'msg err'; msg.textContent = res.error; return; }
+      credSession = { pass: pass, users: res.users || [] };
+      showCredList();
+    }).catch(function () { clearBtnLoading(btn); msg.className = 'msg err'; msg.textContent = 'Нет связи с сервером'; });
+  }
+  document.getElementById('cr-go').onclick = go;
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+}
+
+function credCopy(text) {
+  function fallback() {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('Скопировано'); } catch (e) { toast('Не удалось скопировать'); }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast('Скопировано'); }, fallback);
+  else fallback();
+}
+
+function showCredList() {
+  if (!credSession) { showCredAuth(); return; }
+  var users = credSession.users;
+  credKeep = true;
+  var rows = users.map(function (u, i) {
+    var role = u.role === 'admin' ? '<span class="badge s-active">Админ</span>' : '<span class="badge s-no_data">Кассир</span>';
+    var hasPw = !!u.password;
+    return '<div class="cred-row">' +
+      '<div class="cred-head"><div class="nm">' + esc(u.fullName) + '</div>' + role + '</div>' +
+      '<div class="cred-line"><span class="k">Логин</span><span class="v">' + esc(u.login) + '</span><button class="btn-ghost" data-copy-login="' + i + '">Копировать</button></div>' +
+      '<div class="cred-line"><span class="k">Пароль</span>' +
+        (hasPw
+          ? '<span class="v" id="cr-pw-' + i + '" data-shown="0">••••••••</span><button class="btn-ghost" data-eye="' + i + '">Показать</button>'
+          : '<span class="v off">ещё не сохранён — задайте новый или он появится после входа сотрудника</span>') +
+      '</div>' +
+      '<div class="row-btns" style="margin-top:8px;">' +
+        (hasPw ? '<button class="btn-ghost" data-copy-pw="' + i + '">Копировать пароль</button>' : '') +
+        '<button class="btn-secondary" data-edit="' + i + '" style="margin:0;">Изменить</button>' +
+      '</div></div>';
+  }).join('');
+  openModal(
+    '<button class="modal-x" onclick="credClear(); closeModal()">✕</button>' +
+    '<h2>Логины и пароли</h2>' +
+    '<p class="sub">Никому не показывайте этот экран. Здесь можно изменить логин и пароль любого сотрудника — он сразу начнёт входить по-новому.</p>' +
+    '<div id="cr-list" style="margin-top:12px;">' + (rows || '<p class="sub">Сотрудников пока нет.</p>') + '</div>' +
+    '<button class="btn-ghost" style="width:100%;" onclick="credClear(); closeModal()">Закрыть</button>'
+  );
+  var list = document.getElementById('cr-list');
+  Array.prototype.forEach.call(list.querySelectorAll('[data-eye]'), function (b) {
+    b.onclick = function () {
+      var i = Number(b.getAttribute('data-eye'));
+      var el = document.getElementById('cr-pw-' + i);
+      var shown = el.getAttribute('data-shown') === '1';
+      el.textContent = shown ? '••••••••' : users[i].password;
+      el.setAttribute('data-shown', shown ? '0' : '1');
+      b.textContent = shown ? 'Показать' : 'Скрыть';
+    };
+  });
+  Array.prototype.forEach.call(list.querySelectorAll('[data-copy-login]'), function (b) {
+    b.onclick = function () { credCopy(users[Number(b.getAttribute('data-copy-login'))].login); };
+  });
+  Array.prototype.forEach.call(list.querySelectorAll('[data-copy-pw]'), function (b) {
+    b.onclick = function () { credCopy(users[Number(b.getAttribute('data-copy-pw'))].password); };
+  });
+  Array.prototype.forEach.call(list.querySelectorAll('[data-edit]'), function (b) {
+    b.onclick = function () { showCredEdit(users[Number(b.getAttribute('data-edit'))]); };
+  });
+}
+
+function showCredEdit(u) {
+  credKeep = true;
+  openModal(
+    '<button class="modal-x" onclick="credClear(); closeModal()">✕</button>' +
+    '<h2>Изменить вход</h2>' +
+    '<p class="sub">' + esc(u.fullName) + '</p>' +
+    '<label>Логин</label><input id="ce-login" value="' + esc(u.login) + '" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+    '<label>Пароль</label><input id="ce-pass" value="' + esc(u.password || '') + '" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="' + (u.password ? '' : 'Введите новый пароль') + '">' +
+    '<p class="sub" style="margin:6px 0 0; font-size:12.5px;">Не менее 4 символов. После сохранения сотрудник входит по новому логину и паролю.</p>' +
+    '<button class="btn-primary" id="ce-save">Сохранить</button>' +
+    '<button class="btn-ghost" id="ce-back" style="width:100%; margin-top:10px;">Назад</button>' +
+    '<div id="ce-msg" class="msg"></div>'
+  );
+  document.getElementById('ce-back').onclick = showCredList;
+  document.getElementById('ce-save').onclick = function () {
+    var btn = this;
+    var msg = document.getElementById('ce-msg');
+    var login = document.getElementById('ce-login').value.trim();
+    var pass = document.getElementById('ce-pass').value;
+    function bad(text) { msg.className = 'msg err'; msg.textContent = text; }
+    if (!login) { bad('Логин не может быть пустым'); return; }
+    if (!pass && !u.password) { bad('Введите пароль — сейчас он не сохранён'); return; }
+    if (pass && pass.length < 4) { bad('Пароль слишком короткий (минимум 4 символа)'); return; }
+    var passChanged = !!pass && pass !== u.password;
+    if (login === u.login && !passChanged) { showCredList(); return; }
+    setBtnLoading(btn, 'Сохраняем…');
+    apiPost('updateUser', {
+      actorRole: state.user.role, origLogin: u.login, login: login,
+      password: passChanged ? pass : '', role: u.role, fullName: u.fullName
+    }).then(function (res) {
+      clearBtnLoading(btn);
+      if (!res.success) { bad(res.error); return; }
+      var self = u.login.toLowerCase() === state.user.username.toLowerCase();
+      if (self) {
+        // меняем собственные данные: обновляем сессию, иначе следующая проверка пароля пойдёт со старым логином
+        state.user.username = login;
+        try { sessionStorage.setItem('crmUser', JSON.stringify(state.user)); } catch (e) {}
+        if (passChanged) credSession.pass = pass;
+      }
+      u.login = login;
+      if (passChanged) u.password = pass;
+      toast('Сохранено');
+      state.staffCache = null;
+      apiGet('listUsers', {}).then(function (list) { state.staffCache = list || []; persistCache('staff', state.staffCache); }).catch(function () {});
+      showCredList();
+    }).catch(function () { clearBtnLoading(btn); bad('Нет связи с сервером'); });
+  };
+}
+
 // ============================ ВКЛАДКА: ЕЩЁ (пароль, экспорт) ============================
 function viewSettings(v) {
   var isAdmin = state.user.role === 'admin';
@@ -3101,6 +3426,9 @@ function viewSettings(v) {
       '<button class="btn-primary" id="pw-save">Сменить пароль</button>' +
       '<div id="pw-msg" class="msg"></div>' +
     '</div>' + adminExtra +
+    (isAdmin ? '<div class="card" id="cred-card"><h2>Логины и пароли</h2>' +
+      '<p class="sub">Логины и пароли сотрудников магазина: посмотреть и, если нужно, изменить. Для просмотра потребуется ввести ваш пароль.</p>' +
+      '<button class="btn-secondary" id="cr-open" style="width:100%;">Показать логины и пароли</button></div>' : '') +
     (isAdmin ? '<div class="card" id="backup-card"><h2>Резервная копия в Google</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="bg-card"><h2>Фон для наклейки карты</h2><p class="sub">Загрузка…</p></div>' : '') +
     (isAdmin ? '<div class="card" id="nfc-admin-card"><h2>NFC-метки</h2><p class="sub">Загрузка…</p></div>' : '') +
@@ -3122,7 +3450,7 @@ function viewSettings(v) {
       else { msg.className = 'msg err'; msg.textContent = res.error; }
     }).catch(function () { clearBtnLoading(btn); });
   };
-  if (isAdmin) { renderBackupBlock(); renderBgSettings(); renderNfcAdminBlock(); renderProductsBlock(); renderJournalBlock(); }
+  if (isAdmin) { document.getElementById('cr-open').onclick = showCredAuth; renderBackupBlock(); renderBgSettings(); renderNfcAdminBlock(); renderProductsBlock(); renderJournalBlock(); }
 }
 
 /** «Ещё → Резервная копия в Google»: где лежат данные, когда была последняя копия, кнопка «сделать копию сейчас» */
@@ -3841,15 +4169,23 @@ function nfcCaptureHtml(p) {
     '<p class="sub" id="' + p + '-hint" style="margin:6px 0 0; font-size:12.5px;">Поле уже активно: USB-считыватель сам введёт номер' + (nfcSupported() ? ', либо нажмите «Телефон»' : '') + '. Можно ввести номер вручную.</p>';
 }
 
-function wireNfcCapture(p, onEnter) {
+function wireNfcCapture(p, onEnter, auto) {
   var inp = document.getElementById(p + '-uid');
   var hint = document.getElementById(p + '-hint');
   if (!inp) return;
+  var idleTimer = null;
+  if (auto && onEnter) {
+    // auto: как только номер метки введён (считыватель или телефон) — сразу проверяем её, без лишнего нажатия
+    inp.addEventListener('input', function () {
+      clearTimeout(idleTimer);
+      if (usbAutoSubmit() && looksLikeUid(inp.value)) idleTimer = setTimeout(onEnter, 350);
+    });
+  }
   var coarse = false;
   try { coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches; } catch (e) {}
   if (!coarse) setTimeout(function () { inp.focus(); }, 60); // на телефоне не вызываем клавиатуру сами
   inp.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); if (onEnter) onEnter(); }
+    if (e.key === 'Enter') { e.preventDefault(); clearTimeout(idleTimer); if (onEnter) onEnter(); }
   });
   var phoneBtn = document.getElementById(p + '-phone');
   if (!phoneBtn) return;
@@ -3861,6 +4197,7 @@ function wireNfcCapture(p, onEnter) {
       try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) {}
       nfcPhoneStop(false);
       setHint('Метка считана: ' + inp.value, false);
+      if (auto && onEnter) onEnter();
     }, setHint, 'modal', function () { var b = document.getElementById(p + '-phone'); if (b) b.textContent = 'Телефон'; });
     if (ok) phoneBtn.textContent = 'Стоп';
   };
@@ -4262,6 +4599,7 @@ function openModal(html) {
   document.body.appendChild(ov);
 }
 function closeModal() {
+  if (credKeep) credKeep = false; else credSession = null; // любое закрытие окна паролей (в т.ч. клик мимо) стирает пароль админа из памяти
   if (state.nfc && state.nfc.owner === 'modal') nfcPhoneStop(false); // окно закрыто — телефонное NFC-чтение из него больше не нужно
   var ov = document.getElementById('overlay'); if (ov) ov.remove();
 }
